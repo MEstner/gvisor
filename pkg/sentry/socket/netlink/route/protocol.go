@@ -99,8 +99,9 @@ func (p *Protocol) dumpLinks(ctx context.Context, s *netlink.Socket, msg *nlmsg.
 		return nil
 	}
 
-	for idx, i := range stack.Interfaces() {
-		p.AddNewLinkMessage(ms, idx, i)
+	ifaces := stack.Interfaces()
+	for _, idx := range stack.InterfaceIDs() {
+		p.AddNewLinkMessage(ms, idx, ifaces[idx])
 	}
 
 	return nil
@@ -301,8 +302,9 @@ func (p *Protocol) dumpAddrs(ctx context.Context, s *netlink.Socket, msg *nlmsg.
 		return nil
 	}
 
-	for id, as := range stack.InterfaceAddrs() {
-		for _, a := range as {
+	ifAddrs := stack.InterfaceAddrs()
+	for _, id := range stack.InterfaceIDs() {
+		for _, a := range ifAddrs[id] {
 			m := ms.AddMessage(linux.NetlinkMessageHeader{
 				Type: linux.RTM_NEWADDR,
 			})

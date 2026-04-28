@@ -16,6 +16,8 @@ package netstack
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/context"
@@ -97,22 +99,6 @@ func (s *Stack) sendDeleteEvent(ctx context.Context, id tcpip.NICID, nicInfo *st
 	s.eventSubscriber.OnInterfaceDeleteEvent(ctx, int32(id), makeInterfaceInfo(nicInfo))
 }
 
-// EnableSaveRestore enables netstack s/r.
-func (s *Stack) EnableSaveRestore() error {
-	if s.Stack != nil {
-		s.Stack.EnableSaveRestore()
-	}
-	return nil
-}
-
-// IsSaveRestoreEnabled implements inet.Stack.IsSaveRestoreEnabled.
-func (s *Stack) IsSaveRestoreEnabled() bool {
-	if s.Stack == nil {
-		return false
-	}
-	return s.Stack.IsSaveRestoreEnabled()
-}
-
 // Destroy implements inet.Stack.Destroy.
 func (s *Stack) Destroy() {
 	if s.Stack != nil {
@@ -151,6 +137,13 @@ func (s *Stack) Interfaces() map[int32]inet.Interface {
 		is[int32(id)] = makeInterfaceInfo(&ni)
 	}
 	return is
+}
+
+// InterfaceIDs implements inet.Stack.InterfaceIDs.
+func (s *Stack) InterfaceIDs() []int32 {
+	// Since gVisor allocates NIC IDs monotonically (like Linux ifindex),
+	// sorting by ID is equivalent to registration order.
+	return slices.Sorted(maps.Keys(s.Interfaces()))
 }
 
 // RemoveInterface implements inet.Stack.RemoveInterface.

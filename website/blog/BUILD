@@ -153,6 +153,33 @@ doc(
     permalink = "/blog/2024/09/23/safe-ride-into-the-dangerzone/",
 )
 
+doc(
+    name = "magi_multi_agent_gvisor_isolation",
+    src = "2026-04-15-magi-multi-agent-gvisor-isolation.md",
+    authors = [
+        "eperot",
+        "chjing",
+    ],
+    body_classes = [
+        "darkbg",
+        "magi",
+    ],
+    layout = "post",
+    permalink = "/blog/2026/04/15/magi-multi-agent-gvisor-isolation/",
+)
+
+doc(
+    name = "scaling_agentic_rl_sandboxes_to_the_millions_with_gvisor_at_tencent",
+    src = "2026-04-23-scaling-agentic-rl-sandboxes-to-the-millions-with-gvisor-at-tencent.md",
+    authors = [
+        "yifengtan",
+        "hualiu",
+        "huichen",
+    ],
+    layout = "post",
+    permalink = "/blog/2026/04/23/scaling-agentic-rl-sandboxes-to-the-millions-with-gvisor-at-tencent/",
+)
+
 docs(
     name = "posts",
     deps = [
