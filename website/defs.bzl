@@ -18,6 +18,7 @@ DocInfo = provider(
         "editpath",
         "authors",
         "include_in_menu",
+        "body_classes",
     ],
 )
 
@@ -36,6 +37,7 @@ def _doc_impl(ctx):
             editpath = short_path(ctx.files.src[0].short_path),
             authors = ctx.attr.authors,
             include_in_menu = ctx.attr.include_in_menu,
+            body_classes = ctx.attr.body_classes,
         ),
     ]
 
@@ -81,6 +83,10 @@ doc = rule(
             doc = "Include document in the navigation menu.",
             default = True,
         ),
+        "body_classes": attr.string_list(
+            doc = "Classes to add to the body tag.",
+            default = [],
+        ),
     },
 )
 
@@ -119,7 +125,8 @@ weight: {weight}
 editpath: {editpath}
 authors: {authors}
 layout: {layout}
-include_in_menu: {include_in_menu}"""
+include_in_menu: {include_in_menu}
+body_classes: {body_classes}"""
 
         for f in dep.files.to_list():
             # Is this a markdown file? If not, then we ensure that it ends up
@@ -158,7 +165,7 @@ include_in_menu: {include_in_menu}"""
             # that the pipeline here is almost important, as the grep will
             # return non-zero if the file is empty, but we ignore that within
             # the pipeline.
-            builder_content.append("grep -v -E '^# ' %s | sed -e 's|^\\[TOC\\]$|- TOC\\n{:toc}|' >>$T/%s" %
+            builder_content.append("awk '!found && /^# / {found=1; next} 1' %s | sed -e 's|^\\[TOC\\]$|- TOC\\n{:toc}|' >>$T/%s" %
                                    (f.path, dest))
 
     builder_content.append("declare -r filename=$(readlink -m %s)" % tarball.path)

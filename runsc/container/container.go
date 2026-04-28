@@ -142,7 +142,7 @@ type Container struct {
 	// GoferMountConfs contains information about how the gofer mounts have been
 	// overlaid (with tmpfs or overlayfs). The first entry is for rootfs and the
 	// following entries are for bind mounts in Spec.Mounts (in the same order).
-	GoferMountConfs boot.GoferMountConfFlags `json:"goferMountConfs"`
+	GoferMountConfs specutils.GoferMountConfFlags `json:"goferMountConfs"`
 
 	//
 	// Fields below this line are not saved in the state file and will not
@@ -272,78 +272,10 @@ func New(conf *config.Config, args Args) (*Container, error) {
 	//      already started sandbox. In this case, container ID is different than
 	//      the sandbox ID.
 	if specutils.IsRootContainer(args.Spec) {
-		log.Debugf("Creating new sandbox for container, cid: %s", args.ID)
-
-		if args.Spec.Linux == nil {
-			args.Spec.Linux = &specs.Linux{}
-		}
-		// Don't force the use of cgroups in tests because they lack permission to do so.
-		if args.Spec.Linux.CgroupsPath == "" && !conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
-			args.Spec.Linux.CgroupsPath = "/" + args.ID
-		}
-		var subCgroup, parentCgroup, containerCgroup cgroup.Cgroup
-		if !conf.IgnoreCgroups {
-			var err error
-
-			// Create and join cgroup before processes are created to ensure they are
-			// part of the cgroup from the start (and all their children processes).
-			parentCgroup, subCgroup, err = c.setupCgroupForRoot(conf, args.Spec)
-			if err != nil {
-				return nil, fmt.Errorf("cannot set up cgroup for root: %w", err)
-			}
-			// Join the child cgroup when using cgroupfs. Joining non leaf-node
-			// cgroups is illegal in cgroupsv2 and will return EBUSY.
-			if subCgroup != nil && !conf.SystemdCgroup && cgroup.IsOnlyV2() {
-				containerCgroup = subCgroup
-			} else {
-				containerCgroup = parentCgroup
-			}
-		}
-		c.CompatCgroup = cgroup.CgroupJSON{Cgroup: subCgroup}
-		mountHints, err := boot.NewPodMountHints(args.Spec)
-		if err != nil {
-			return nil, fmt.Errorf("error creating pod mount hints: %w", err)
-		}
-		if err := nvProxyPreGoferHostSetup(args.Spec, conf); err != nil {
+		if err := c.createRoot(conf, args, sandboxID); err != nil {
 			return nil, err
 		}
-		if err := cgroup.RunInCgroup(containerCgroup, func() error {
-			ioFiles, goferFilestores, devIOFile, specFile, err := c.createGoferProcess(conf, mountHints, args.Attached)
-			if err != nil {
-				return fmt.Errorf("cannot create gofer process: %w", err)
-			}
 
-			// Start a new sandbox for this container. Any errors after this point
-			// must destroy the container.
-			sandArgs := &sandbox.Args{
-				ID:                  sandboxID,
-				Spec:                args.Spec,
-				BundleDir:           args.BundleDir,
-				ConsoleSocket:       args.ConsoleSocket,
-				UserLog:             args.UserLog,
-				IOFiles:             ioFiles,
-				DevIOFile:           devIOFile,
-				MountsFile:          specFile,
-				Cgroup:              containerCgroup,
-				Attached:            args.Attached,
-				GoferFilestoreFiles: goferFilestores,
-				GoferMountConfs:     c.GoferMountConfs,
-				MountHints:          mountHints,
-				PassFiles:           args.PassFiles,
-				ExecFile:            args.ExecFile,
-				FSRestoreImagePath:  args.FSRestoreImagePath,
-				FSRestoreDirect:     args.FSRestoreDirect,
-			}
-			sand, err := sandbox.New(conf, sandArgs)
-			if err != nil {
-				return fmt.Errorf("cannot create sandbox: %w", err)
-			}
-			c.Sandbox = sand
-			return nil
-
-		}); err != nil {
-			return nil, err
-		}
 	} else {
 		log.Debugf("Creating new container, cid: %s, sandbox: %s", c.ID, sandboxID)
 
@@ -358,28 +290,8 @@ func New(conf *config.Config, args Args) (*Container, error) {
 		}
 		c.Sandbox = sb.Sandbox
 
-		subCgroup, err := c.setupCgroupForSubcontainer(conf, args.Spec)
-		if err != nil {
+		if err := c.createSubcontainer(conf, args.Spec); err != nil {
 			return nil, err
-		}
-		c.CompatCgroup = cgroup.CgroupJSON{Cgroup: subCgroup}
-
-		// If the console control socket file is provided, then create a new
-		// pty master/slave pair and send the TTY to the sandbox process.
-		var tty *os.File
-		if c.ConsoleSocket != "" {
-			// Create a new TTY pair and send the master on the provided socket.
-			var err error
-			tty, err = console.NewWithSocket(c.ConsoleSocket)
-			if err != nil {
-				return nil, fmt.Errorf("setting up console with socket %q: %w", c.ConsoleSocket, err)
-			}
-			// tty file is transferred to the sandbox, then it can be closed here.
-			defer tty.Close()
-		}
-
-		if err := c.Sandbox.CreateSubcontainer(conf, c.ID, tty); err != nil {
-			return nil, fmt.Errorf("cannot create subcontainer: %w", err)
 		}
 	}
 	c.changeStatus(Created)
@@ -422,6 +334,109 @@ func New(conf *config.Config, args Args) (*Container, error) {
 	return c, nil
 }
 
+func (c *Container) createRoot(conf *config.Config, args Args, sandboxID string) error {
+	log.Debugf("Creating new sandbox for container, cid: %s", args.ID)
+
+	if args.Spec.Linux == nil {
+		args.Spec.Linux = &specs.Linux{}
+	}
+	// Don't force the use of cgroups in tests because they lack permission to do so.
+	if args.Spec.Linux.CgroupsPath == "" && !conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
+		args.Spec.Linux.CgroupsPath = "/" + args.ID
+	}
+	var subCgroup, parentCgroup, containerCgroup cgroup.Cgroup
+	if !conf.IgnoreCgroups {
+		var err error
+
+		// Create and join cgroup before processes are created to ensure they are
+		// part of the cgroup from the start (and all their children processes).
+		parentCgroup, subCgroup, err = c.setupCgroupForRoot(conf, args.Spec)
+		if err != nil {
+			return fmt.Errorf("cannot set up cgroup for root: %w", err)
+		}
+		// Join the child cgroup when using cgroupfs. Joining non leaf-node
+		// cgroups is illegal in cgroupsv2 and will return EBUSY.
+		if subCgroup != nil && !conf.SystemdCgroup && cgroup.IsOnlyV2() {
+			containerCgroup = subCgroup
+		} else {
+			containerCgroup = parentCgroup
+		}
+	}
+	c.CompatCgroup = cgroup.CgroupJSON{Cgroup: subCgroup}
+	mountHints, err := boot.NewPodMountHints(args.Spec)
+	if err != nil {
+		return fmt.Errorf("error creating pod mount hints: %w", err)
+	}
+	if err := nvProxyPreGoferHostSetup(args.Spec, conf); err != nil {
+		return err
+	}
+	if err := cgroup.RunInCgroup(containerCgroup, func() error {
+		ioFiles, goferFilestores, devIOFile, specFile, err := c.createGoferProcess(conf, mountHints, args.Attached)
+		if err != nil {
+			return fmt.Errorf("cannot create gofer process: %w", err)
+		}
+
+		// Start a new sandbox for this container. Any errors after this point
+		// must destroy the container.
+		sandArgs := &sandbox.Args{
+			ID:                  sandboxID,
+			Spec:                args.Spec,
+			BundleDir:           args.BundleDir,
+			ConsoleSocket:       args.ConsoleSocket,
+			UserLog:             args.UserLog,
+			IOFiles:             ioFiles,
+			DevIOFile:           devIOFile,
+			MountsFile:          specFile,
+			Cgroup:              containerCgroup,
+			Attached:            args.Attached,
+			GoferFilestoreFiles: goferFilestores,
+			GoferMountConfs:     c.GoferMountConfs,
+			MountHints:          mountHints,
+			PassFiles:           args.PassFiles,
+			ExecFile:            args.ExecFile,
+			FSRestoreImagePath:  args.FSRestoreImagePath,
+			FSRestoreDirect:     args.FSRestoreDirect,
+		}
+		sand, err := sandbox.New(conf, sandArgs)
+		if err != nil {
+			return fmt.Errorf("cannot create sandbox: %w", err)
+		}
+		c.Sandbox = sand
+		return nil
+
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Container) createSubcontainer(conf *config.Config, spec *specs.Spec) error {
+	subCgroup, err := c.setupCgroupForSubcontainer(conf, spec)
+	if err != nil {
+		return err
+	}
+	c.CompatCgroup = cgroup.CgroupJSON{Cgroup: subCgroup}
+
+	// If the console control socket file is provided, then create a new
+	// pty master/slave pair and send the TTY to the sandbox process.
+	var tty *os.File
+	if c.ConsoleSocket != "" {
+		// Create a new TTY pair and send the master on the provided socket.
+		var err error
+		tty, err = console.NewWithSocket(c.ConsoleSocket)
+		if err != nil {
+			return fmt.Errorf("setting up console with socket %q: %w", c.ConsoleSocket, err)
+		}
+		// tty file is transferred to the sandbox, then it can be closed here.
+		defer tty.Close()
+	}
+
+	if err := c.Sandbox.CreateSubcontainer(conf, c.ID, tty); err != nil {
+		return fmt.Errorf("cannot create subcontainer: %w", err)
+	}
+	return nil
+}
+
 // Start starts running the containerized process inside the sandbox.
 func (c *Container) Start(conf *config.Config) error {
 	log.Debugf("Start container, cid: %s", c.ID)
@@ -439,7 +454,7 @@ func (c *Container) Restore(conf *config.Config, imagePath string, direct, backg
 	return c.startImpl(conf, "restore", restore, c.Sandbox.RestoreSubcontainer)
 }
 
-func (c *Container) startImpl(conf *config.Config, action string, startRoot func(conf *config.Config, spec *specs.Spec) error, startSub func(spec *specs.Spec, conf *config.Config, cid string, stdios, goferFiles, goferFilestores []*os.File, devIOFile *os.File, goferConfs []boot.GoferMountConf) error) error {
+func (c *Container) startImpl(conf *config.Config, action string, startRoot func(conf *config.Config, spec *specs.Spec) error, startSub func(spec *specs.Spec, conf *config.Config, cid string, stdios, goferFiles, goferFilestores []*os.File, devIOFile *os.File, goferConfs []specutils.GoferMountConf) error) error {
 	if err := c.Saver.lock(BlockAcquire); err != nil {
 		return err
 	}
@@ -780,6 +795,19 @@ func (c *Container) SignalProcess(sig unix.Signal, pid int32) error {
 	return c.Sandbox.SignalProcess(c.ID, int32(pid), sig, false)
 }
 
+// SignalProcessGroup sends sig to all processes in the given process group
+// inside the container.
+func (c *Container) SignalProcessGroup(sig unix.Signal, pgid int32) error {
+	log.Debugf("Signal process group %d in container, cid: %s, signal: %v (%d)", pgid, c.ID, sig, sig)
+	if err := c.requireStatus("signal a process group inside", Running); err != nil {
+		return err
+	}
+	if !c.IsSandboxRunning() {
+		return fmt.Errorf("sandbox is not running")
+	}
+	return c.Sandbox.SignalProcessGroup(c.ID, pgid, sig)
+}
+
 // ForwardSignals forwards all signals received by the current process to the
 // container process inside the sandbox. It returns a function that will stop
 // forwarding signals.
@@ -1005,38 +1033,38 @@ func (c *Container) forEachSelfMount(fn func(mountSrc string)) {
 	}
 }
 
-func createGoferConf(overlayMedium config.OverlayMedium, overlaySize string, mountType string, mountSrc string) (boot.GoferMountConf, error) {
-	var lower boot.GoferMountConfLowerType
+func createGoferConf(overlayMedium config.OverlayMedium, overlaySize string, mountType string, mountSrc string) (specutils.GoferMountConf, error) {
+	var lower specutils.GoferMountConfLowerType
 	switch mountType {
 	case boot.Bind:
-		lower = boot.Lisafs
+		lower = specutils.Lisafs
 	case tmpfs.Name:
-		lower = boot.NoneLower
+		lower = specutils.NoneLower
 	case erofs.Name:
-		lower = boot.Erofs
+		lower = specutils.Erofs
 	default:
-		return boot.GoferMountConf{}, fmt.Errorf("unsupported mount type %q in mount hint", mountType)
+		return specutils.GoferMountConf{}, fmt.Errorf("unsupported mount type %q in mount hint", mountType)
 	}
 	switch overlayMedium {
 	case config.NoOverlay:
-		return boot.GoferMountConf{Lower: lower, Upper: boot.NoOverlay}, nil
+		return specutils.GoferMountConf{Lower: lower, Upper: specutils.NoOverlay}, nil
 	case config.MemoryOverlay:
-		return boot.GoferMountConf{Lower: lower, Upper: boot.MemoryOverlay, Size: overlaySize}, nil
+		return specutils.GoferMountConf{Lower: lower, Upper: specutils.MemoryOverlay, Size: overlaySize}, nil
 	case config.SelfOverlay:
 		mountSrcInfo, err := os.Stat(mountSrc)
 		if err != nil {
-			return boot.GoferMountConf{}, fmt.Errorf("failed to stat mount %q to see if it were a directory: %v", mountSrc, err)
+			return specutils.GoferMountConf{}, fmt.Errorf("failed to stat mount %q to see if it were a directory: %v", mountSrc, err)
 		}
 		if !mountSrcInfo.IsDir() {
 			log.Warningf("self filestore is only supported for directory mounts, but mount %q is not a directory, falling back to memory", mountSrc)
-			return boot.GoferMountConf{Lower: lower, Upper: boot.MemoryOverlay, Size: overlaySize}, nil
+			return specutils.GoferMountConf{Lower: lower, Upper: specutils.MemoryOverlay, Size: overlaySize}, nil
 		}
-		return boot.GoferMountConf{Lower: lower, Upper: boot.SelfOverlay, Size: overlaySize}, nil
+		return specutils.GoferMountConf{Lower: lower, Upper: specutils.SelfOverlay, Size: overlaySize}, nil
 	default:
 		if overlayMedium.IsBackedByAnon() {
-			return boot.GoferMountConf{Lower: lower, Upper: boot.AnonOverlay, Size: overlaySize}, nil
+			return specutils.GoferMountConf{Lower: lower, Upper: specutils.AnonOverlay, Size: overlaySize}, nil
 		}
-		return boot.GoferMountConf{}, fmt.Errorf("unexpected overlay medium %q", overlayMedium)
+		return specutils.GoferMountConf{}, fmt.Errorf("unexpected overlay medium %q", overlayMedium)
 	}
 }
 
@@ -1143,14 +1171,14 @@ func (c *Container) createGoferFilestores(ovlConf config.Overlay2, mountHints *b
 	return goferFilestores, nil
 }
 
-func (c *Container) createGoferFilestore(goferRootfs string, ovlConf config.Overlay2, goferConf boot.GoferMountConf, mountSrc string, mountHints *boot.PodMountHints) (*os.File, error) {
+func (c *Container) createGoferFilestore(goferRootfs string, ovlConf config.Overlay2, goferConf specutils.GoferMountConf, mountSrc string, mountHints *boot.PodMountHints) (*os.File, error) {
 	if !goferConf.IsFilestorePresent() {
 		return nil, nil
 	}
 	switch goferConf.Upper {
-	case boot.SelfOverlay:
+	case specutils.SelfOverlay:
 		return c.createGoferFilestoreInSelf(goferRootfs, mountSrc, mountHints)
-	case boot.AnonOverlay:
+	case specutils.AnonOverlay:
 		return c.createGoferFilestoreInDir(goferRootfs, ovlConf.Medium().HostFileDir())
 	default:
 		return nil, fmt.Errorf("unexpected upper layer with filestore %s", goferConf)
@@ -1313,7 +1341,7 @@ func shouldCreateDeviceGofer(spec *specs.Spec, conf *config.Config) bool {
 }
 
 // shouldSpawnGofer indicates whether the gofer process should be spawned.
-func shouldSpawnGofer(spec *specs.Spec, conf *config.Config, goferConfs []boot.GoferMountConf) bool {
+func shouldSpawnGofer(spec *specs.Spec, conf *config.Config, goferConfs []specutils.GoferMountConf) bool {
 	// Lisafs mounts need the gofer.
 	for _, cfg := range goferConfs {
 		if cfg.ShouldUseLisafs() {

@@ -1,4 +1,4 @@
-// Copyright 2018 The gVisor Authors.
+// Copyright 2026 The gVisor Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package netstack
+//go:build !false
+// +build !false
 
-import (
-	"context"
+package maincli
 
-	"gvisor.dev/gvisor/pkg/tcpip/stack"
-)
+import "gvisor.dev/gvisor/runsc/cmd/util"
 
-// afterLoad is invoked by stateify.
-func (s *Stack) afterLoad(ctx context.Context) {
-	if s.IsSaveRestoreEnabled() {
-		// This indicates that netstack s/r is enabled and the stack
-		// should not be replaced with the new stack from context.
-		return
-	}
-	s.Stack = stack.RestoreStackFromContext(ctx)
-	if s.Stack == nil {
-		panic("can't restore without netstack/tcpip/stack.Stack")
-	}
+func extraCmds(_ map[util.SubCommand]string) {
+	// Does nothing for now.
 }

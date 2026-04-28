@@ -146,7 +146,7 @@ type containerInfo struct {
 	// goferMountConfs contains information about how the gofer mounts have been
 	// configured. The first entry is for rootfs and the following entries are
 	// for bind mounts in Spec.Mounts (in the same order).
-	goferMountConfs []GoferMountConf
+	goferMountConfs []specutils.GoferMountConf
 
 	// nvidiaHostSettings holds information on the Nvidia GPU driver.
 	nvidiaHostSettings *nvconf.HostSettings
@@ -245,6 +245,11 @@ type Loader struct {
 	// productName is the value to show in
 	// /sys/devices/virtual/dmi/id/product_name.
 	productName string
+
+	// cpuQuota and cpuPeriod are the raw host CFS settings that should be
+	// exposed through sandbox cgroupfs.
+	cpuQuota  int64
+	cpuPeriod int64
 
 	hostTHP HostTHP
 
@@ -384,9 +389,13 @@ type Args struct {
 	// GoferMountConfs contains information about how the gofer mounts have been
 	// configured. The first entry is for rootfs and the following entries are
 	// for bind mounts in Spec.Mounts (in the same order).
-	GoferMountConfs []GoferMountConf
+	GoferMountConfs []specutils.GoferMountConf
 	// NumCPU is the number of CPUs to create inside the sandbox.
 	NumCPU int
+	// CPUQuota and CPUPeriod are the raw host CFS settings that should be
+	// reflected by sandbox cgroupfs.
+	CPUQuota  int64
+	CPUPeriod int64
 	// TotalMem is the initial amount of total memory to report back to the
 	// container.
 	TotalMem uint64
@@ -506,6 +515,8 @@ func New(args Args) (*Loader, error) {
 		sharedMounts:   make(map[string]*vfs.Mount),
 		stopProfiling:  stopProfiling,
 		productName:    args.ProductName,
+		cpuQuota:       args.CPUQuota,
+		cpuPeriod:      args.CPUPeriod,
 		hostTHP:        args.HostTHP,
 		containerIDs:   make(map[string]string),
 		containerSpecs: make(map[string]*specs.Spec),
@@ -646,11 +657,8 @@ func New(args Args) (*Loader, error) {
 
 	// S/R is not supported for hostinet and plugin network stack.
 	netMode := l.root.conf.Network
-	if netMode != config.NetworkHost && netMode != config.NetworkPlugin && args.Conf.SaveRestoreNetstack {
+	if netMode == config.NetworkSandbox || netMode == config.NetworkNone {
 		l.saveRestoreNet = true
-		if err := netns.Stack().EnableSaveRestore(); err != nil {
-			return nil, fmt.Errorf("enable s/r: %w", err)
-		}
 	}
 
 	if args.TotalHostMem > 0 {
@@ -1166,7 +1174,7 @@ func (l *Loader) createSubcontainer(cid string, tty *fd.FD) error {
 // startSubcontainer starts a child container. It returns the thread group ID of
 // the newly created process. Used FDs are either closed or released. It's safe
 // for the caller to close any remaining files upon return.
-func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdioFDs, goferFDs, goferFilestoreFDs []*fd.FD, devGoferFD *fd.FD, goferMountConfs []GoferMountConf, rootfsUpperTarFD *fd.FD) error {
+func (l *Loader) startSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdioFDs, goferFDs, goferFilestoreFDs []*fd.FD, devGoferFD *fd.FD, goferMountConfs []specutils.GoferMountConf, rootfsUpperTarFD *fd.FD) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -1826,6 +1834,15 @@ func (l *Loader) signal(cid string, pid, signo int32, mode SignalDeliveryMode) e
 		}
 		return nil
 
+	case DeliverToProcessGroup:
+		if pid == 0 {
+			return fmt.Errorf("PGID must be set when signaling a process group")
+		}
+		if err := l.signalProcessGroup(cid, kernel.ProcessGroupID(pid), signo); err != nil {
+			return fmt.Errorf("signaling process group %d: %w", pid, err)
+		}
+		return nil
+
 	default:
 		panic(fmt.Sprintf("unknown signal delivery mode %v", mode))
 	}
@@ -1903,6 +1920,28 @@ func (l *Loader) signalAllProcesses(cid string, signo int32) error {
 	l.k.Pause()
 	defer l.k.Unpause()
 	return l.k.SendContainerSignal(cid, &linux.SignalInfo{Signo: signo})
+}
+
+// signalProcessGroup sends the signal to all processes in the process group
+// identified by pgid. pgid is relative to the root PID namespace. It verifies
+// that the process group exists in the container with the given ID.
+func (l *Loader) signalProcessGroup(cid string, pgid kernel.ProcessGroupID, signo int32) error {
+	pg := l.k.RootPIDNamespace().ProcessGroupWithID(pgid)
+	if pg == nil {
+		return fmt.Errorf("no such process group with PGID %d", pgid)
+	}
+	// Verify that the process group exists in correct container.
+	found := false
+	for _, tg := range l.k.TaskSet().Root.ThreadGroups() {
+		if tg.ProcessGroup() == pg && tg.Leader().ContainerID() == cid {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("process group %d does not belong to container %q", pgid, cid)
+	}
+	return l.k.SendExternalSignalProcessGroup(pg, &linux.SignalInfo{Signo: signo})
 }
 
 // threadGroupFromID is similar to tryThreadGroupFromIDLocked except that it

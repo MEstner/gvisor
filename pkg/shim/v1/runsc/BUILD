@@ -39,6 +39,7 @@ go_library(
         "@com_github_containerd_containerd//mount:go_default_library",
         "@com_github_containerd_containerd//namespaces:go_default_library",
         "@com_github_containerd_containerd//pkg/process:go_default_library",
+        "@com_github_containerd_containerd//pkg/shutdown:go_default_library",
         "@com_github_containerd_containerd//pkg/stdio:go_default_library",
         "@com_github_containerd_containerd//runtime:go_default_library",
         "@com_github_containerd_containerd//runtime/linux/runctypes:go_default_library",
@@ -62,6 +63,7 @@ go_test(
     srcs = [
         "oom_v2_test.go",
         "service_test.go",
+        "state_test.go",
     ],
     library = ":runsc",
     deps = [
@@ -69,6 +71,7 @@ go_test(
         "@com_github_containerd_cgroups//v2:go_default_library",
         "@com_github_containerd_containerd//events:go_default_library",
         "@com_github_containerd_containerd//runtime:go_default_library",
+        "@com_github_google_go_cmp//cmp:go_default_library",
         "@com_github_opencontainers_runtime_spec//specs-go:go_default_library",
     ],
 )
