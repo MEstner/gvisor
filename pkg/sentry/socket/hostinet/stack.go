@@ -17,8 +17,10 @@ package hostinet
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -149,6 +151,13 @@ func (s *Stack) Interfaces() map[int32]inet.Interface {
 		return nil
 	}
 	return ifs
+}
+
+// InterfaceIDs implements inet.Stack.InterfaceIDs.
+// hostinet reads interfaces from the host each time, so we sort by ID to
+// ensure a deterministic order consistent with interface registration order.
+func (s *Stack) InterfaceIDs() []int32 {
+	return slices.Sorted(maps.Keys(s.Interfaces()))
 }
 
 // RemoveInterface implements inet.Stack.RemoveInterface.
@@ -424,16 +433,6 @@ func (*Stack) PortRange() (uint16, uint16) {
 // SetPortRange implements inet.Stack.SetPortRange.
 func (*Stack) SetPortRange(uint16, uint16) error {
 	return linuxerr.EACCES
-}
-
-// EnableSaveRestore implements inet.Stack.EnableSaveRestore.
-func (*Stack) EnableSaveRestore() error {
-	return fmt.Errorf("s/r is not supported for hostinet")
-}
-
-// IsSaveRestoreEnabled implements inet.Stack.IsSaveRestoreEnabled.
-func (s *Stack) IsSaveRestoreEnabled() bool {
-	return false
 }
 
 // Stats implements inet.Stack.Stats.

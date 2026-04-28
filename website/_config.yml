@@ -41,6 +41,9 @@ authors:
   bogomolov:
     name: Konstantin Bogomolov
     email: bogomolov@google.com
+  chjing:
+    name: Jing Chen
+    email: chjing@google.com
   eperot:
     name: Etienne Perot
     email: eperot@google.com
@@ -77,3 +80,12 @@ authors:
   yonghe:
     name: Yong He
     email: chenglang.hy@antgroup.com
+  yifengtan:
+    name: Yifeng Tan
+    email: yiftan@tencent.com
+  hualiu:
+    name: Hua Liu
+    email: weldonliu@tencent.com
+  huichen:
+    name: Hui Chen
+    email: cedriccchen@tencent.com

@@ -278,8 +278,10 @@ cc_binary(
     linkstatic = 1,
     malloc = "//test/util:errno_safe_allocator",
     deps = select_gtest() + [
+        "//test/util:capability_util",
         "//test/util:cleanup",
         "//test/util:fs_util",
+        "//test/util:logging",
         "//test/util:posix_error",
         "//test/util:test_main",
         "//test/util:test_util",
@@ -1109,7 +1111,7 @@ cc_binary(
     srcs = ["inotify.cc"],
     linkstatic = 1,
     malloc = "//test/util:errno_safe_allocator",
-    deps = [
+    deps = select_gtest() + [
         "//test/util:epoll_util",
         "//test/util:file_descriptor",
         "//test/util:fs_util",
@@ -1419,7 +1421,9 @@ cc_binary(
     linkstatic = 1,
     malloc = "//test/util:errno_safe_allocator",
     deps = select_gtest() + [
+        "//test/util:capability_util",
         "//test/util:file_descriptor",
+        "//test/util:mount_util",
         "//test/util:temp_path",
         "//test/util:test_main",
         "//test/util:test_util",
@@ -1971,6 +1975,7 @@ cc_binary(
     deps = select_gtest() + [
         "//test/util:capability_util",
         "//test/util:fs_util",
+        "//test/util:logging",
         "//test/util:test_main",
         "//test/util:test_util",
         "//test/util:thread_util",
@@ -2574,7 +2579,7 @@ cc_binary(
     srcs = select_arch(
         amd64 = ["sigreturn_amd64.cc"],
         arm64 = ["sigreturn_arm64.cc"],
-        riscv64 = [],
+        riscv64 = [sigreturn_riscv64.cc],
     ),
     linkstatic = 1,
     malloc = "//test/util:errno_safe_allocator",
@@ -2585,6 +2590,7 @@ cc_binary(
         "//test/util:timer_util",
     ] + select_arch(
         arm64 = ["//test/util:test_main"],
+        riscv64 = ["//test/util:test_main"],
         default = [],
     ),
 )
@@ -2956,6 +2962,7 @@ cc_library(
     ],
     deps = select_gtest() + [
         ":socket_ip_udp_unbound_external_networking",
+        "//test/util:capability_util",
         "//test/util:socket_util",
         "//test/util:test_util",
         "@com_google_absl//absl/cleanup",
@@ -3612,6 +3619,7 @@ cc_binary(
         "//test/util:capability_util",
         "//test/util:cleanup",
         "//test/util:file_descriptor",
+        "//test/util:fs_util",
         "//test/util:logging",
         "//test/util:multiprocess_util",
         "//test/util:posix_error",
@@ -4549,6 +4557,7 @@ cc_binary(
         "//test/util:logging",
         "//test/util:multiprocess_util",
         "//test/util:posix_error",
+        "//test/util:save_util",
         "//test/util:signal_util",
         "//test/util:test_main",
         "//test/util:test_util",
