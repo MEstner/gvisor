@@ -22,8 +22,8 @@ import (
 
 const filename = "state.json"
 
-// state holds information needed between shim invocations.
-type state struct {
+// State holds information needed between shim invocations.
+type State struct {
 	// Rootfs is the full path to the location rootfs was mounted.
 	Rootfs string `json:"rootfs"`
 
@@ -31,16 +31,18 @@ type state struct {
 	Options Options `json:"options"`
 }
 
-func (s state) load(path string) error {
+// Load loads the state from the given path.
+func (s *State) Load(path string) error {
 	data, err := os.ReadFile(filepath.Join(path, filename))
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, &s)
+	return json.Unmarshal(data, s)
 }
 
-func (s state) save(path string) error {
-	data, err := json.Marshal(&s)
+// Save saves the state to the given path.
+func (s *State) Save(path string) error {
+	data, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}

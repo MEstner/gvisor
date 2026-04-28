@@ -12,23 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package netstack
+//go:build riscv64
+// +build riscv64
+
+package platform
 
 import (
-	"context"
-
-	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/context"
+	"gvisor.dev/gvisor/pkg/sentry/arch"
 )
 
-// afterLoad is invoked by stateify.
-func (s *Stack) afterLoad(ctx context.Context) {
-	if s.IsSaveRestoreEnabled() {
-		// This indicates that netstack s/r is enabled and the stack
-		// should not be replaced with the new stack from context.
-		return
-	}
-	s.Stack = stack.RestoreStackFromContext(ctx)
-	if s.Stack == nil {
-		panic("can't restore without netstack/tcpip/stack.Stack")
-	}
+// TryCPUIDEmulate always returns false: there is no cpuid.
+func TryCPUIDEmulate(ctx context.Context, mm MemoryManager, ac *arch.Context64) bool {
+	return false
 }

@@ -256,8 +256,15 @@ network-tests: ## Run all networking integration tests.
 network-tests: iptables-tests packetdrill-tests packetimpact-tests
 .PHONY: network-tests
 
-syscall-tests: $(RUNTIME_BIN) ## Run all system call tests.
-	@$(call test,--test_env=RUNTIME=$(RUNTIME_BIN) --cxxopt=-Werror $(PARTITIONS) test/syscalls/... test/rtnetlink/...)
+# `make syscall-tests` runs all system call tests.
+# To run a single syscall test:
+#   make syscall-tests TARGETS=//test/syscalls:signalfd_test_runsc_systrap_shared
+# To run a single syscall test without caching:
+#   make syscall-tests TARGETS=//test/syscalls:signalfd_test_runsc_systrap_shared OPTIONS=--nocache_test_results
+# To run multiple specific syscall tests:
+#   make syscall-tests TARGETS="//test/syscalls:signalfd_test_runsc_systrap_shared //test/syscalls:link_test_runsc_systrap_shared"
+syscall-tests: $(RUNTIME_BIN)
+	@$(call test,$(OPTIONS) --test_env=RUNTIME=$(RUNTIME_BIN) --cxxopt=-Werror $(PARTITIONS) $(if $(TARGETS),-- $(TARGETS),test/syscalls/... test/rtnetlink/...))
 .PHONY: syscall-tests
 
 packetimpact-tests:
@@ -350,6 +357,15 @@ cos-gpu-all-tests: gpu-images cos-gpu-smoke-tests $(RUNTIME_BIN)
 	@$(call sudo,test/gpu:sniffer_test,--runtime=$(RUNTIME) -test.v --cos-gpu $(ARGS))
 .PHONY: cos-gpu-all-tests
 
+# Images needed for TPU tests.
+tpu-images: load-tpu_vllm load-gpu_sglang_client
+.PHONY: tpu-images
+
+tpu-vllm-tests: tpu-images $(RUNTIME_BIN)
+	@$(call install_runtime,$(RUNTIME),--tpuproxy=true)
+	@$(call sudo,test/tpu:vllm_test,--runtime=$(RUNTIME) -test.v $(ARGS))
+.PHONY: tpu-vllm-tests
+
 cuda-tests: load-basic_alpine load-gpu_cuda-tests $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME),--nvproxy=true --nvproxy-allowed-driver-capabilities=all)
 	@$(call sudo,test/gpu:cuda_test,--runtime=$(RUNTIME) -test.v $(ARGS))
@@ -377,7 +393,6 @@ docker-tests: integration-test-images $(RUNTIME_BIN)
 	@$(call install_runtime,$(RUNTIME)-dcache,--fdlimit=2000 --dcache=100) # Used by TestDentryCacheLimit.
 	@$(call install_runtime,$(RUNTIME)-host-uds,--host-uds=all) # Used by TestHostSocketConnect.
 	@$(call install_runtime,$(RUNTIME)-overlay,--overlay2=all:self) # Used by TestOverlay*.
-	@$(call install_runtime,$(RUNTIME)-save-restore-netstack,--save-restore-netstack=true) # Used by TestRestoreListenConnWithNetstackSR.
 	@$(call test_runtime_cached,$(RUNTIME),$(INTEGRATION_TARGETS) --test_env=TEST_SAVE_RESTORE_NETSTACK=true //test/e2e:integration_runtime_test //test/e2e:runtime_in_docker_test)
 .PHONY: docker-tests
 
@@ -484,6 +499,11 @@ else
 endif
 	@$(call sudo,test/root:root_test,--runtime=$(RUNTIME) -test.v)
 containerd-tests-min: containerd-test-1.6.2
+
+# Test runsc go binding.
+go-binding-test: $(RUNTIME_BIN)
+	@export RUNSC_PATH="$(RUNTIME_BIN)"; $(call sudo,test/root:go_binding_test, -test.v $(ARGS))
+.PHONY: go-binding-test
 
 ##
 ## Benchmarks.

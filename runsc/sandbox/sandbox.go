@@ -275,7 +275,7 @@ type Args struct {
 	// GoferMountConfs contains information about how the gofer mounts have been
 	// configured. The first entry is for rootfs and the following entries are
 	// for bind mounts in Spec.Mounts (in the same order).
-	GoferMountConfs boot.GoferMountConfFlags
+	GoferMountConfs specutils.GoferMountConfFlags
 
 	// MountHints provides extra information about containers mounts that apply
 	// to the entire pod.
@@ -469,7 +469,7 @@ func (s *Sandbox) StartRoot(conf *config.Config, spec *specs.Spec) error {
 }
 
 // StartSubcontainer starts running a sub-container inside the sandbox.
-func (s *Sandbox) StartSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdios, goferFiles, goferFilestores []*os.File, devIOFile *os.File, goferConfs []boot.GoferMountConf) error {
+func (s *Sandbox) StartSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdios, goferFiles, goferFilestores []*os.File, devIOFile *os.File, goferConfs []specutils.GoferMountConf) error {
 	log.Debugf("Start sub-container %q in sandbox %q, PID: %d", cid, s.ID, s.Pid.Load())
 
 	if err := s.configureStdios(conf, stdios); err != nil {
@@ -610,7 +610,7 @@ func (s *Sandbox) setRestoreOptsForLocalCheckpointFiles(conf *config.Config, ima
 }
 
 // RestoreSubcontainer sends the restore call for a sub-container in the sandbox.
-func (s *Sandbox) RestoreSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdios, goferFiles, goferFilestoreFiles []*os.File, devIOFile *os.File, goferMountConf []boot.GoferMountConf) error {
+func (s *Sandbox) RestoreSubcontainer(spec *specs.Spec, conf *config.Config, cid string, stdios, goferFiles, goferFilestoreFiles []*os.File, devIOFile *os.File, goferMountConf []specutils.GoferMountConf) error {
 	log.Debugf("Restore sub-container %q in sandbox %q, PID: %d", cid, s.ID, s.Pid.Load())
 
 	if err := s.configureStdios(conf, stdios); err != nil {
@@ -1257,16 +1257,21 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 		if err != nil {
 			return fmt.Errorf("getting cpu count from cgroups: %v", err)
 		}
-		if conf.CPUNumFromQuota {
+		cpuQuota, err := s.CgroupJSON.Cgroup.CPUQuota()
+		if err != nil {
+			return fmt.Errorf("getting raw cpu quota from cgroups: %v", err)
+		}
+		cpuPeriod, err := s.CgroupJSON.Cgroup.CPUPeriod()
+		if err != nil {
+			return fmt.Errorf("getting raw cpu period from cgroups: %v", err)
+		}
+		if conf.CPUNumFromQuota && cpuQuota > 0 && cpuPeriod > 0 {
 			// Dropping below 2 CPUs can trigger application to disable
 			// locks that can lead do hard to debug errors, so just
 			// leaving two cores as reasonable default.
 			const minCPUs = 2
 
-			quota, err := s.CgroupJSON.Cgroup.CPUQuota()
-			if err != nil {
-				return fmt.Errorf("getting cpu quota from cgroups: %v", err)
-			}
+			quota := float64(cpuQuota) / float64(cpuPeriod)
 			if n := int(math.Ceil(quota)); n > 0 {
 				if n < minCPUs {
 					n = minCPUs
@@ -1278,6 +1283,12 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 			}
 		}
 		cmd.Args = append(cmd.Args, "--cpu-num", strconv.Itoa(cpuNum))
+		if cpuQuota > 0 {
+			cmd.Args = append(cmd.Args, "--cpu-quota", strconv.FormatInt(cpuQuota, 10))
+		}
+		if cpuPeriod > 0 {
+			cmd.Args = append(cmd.Args, "--cpu-period", strconv.FormatInt(cpuPeriod, 10))
+		}
 
 		memLimit, err := s.CgroupJSON.Cgroup.MemoryLimit()
 		if err != nil {
@@ -1535,6 +1546,23 @@ func (s *Sandbox) SignalProcess(cid string, pid int32, sig unix.Signal, fgProces
 	}
 	if err := s.call(boot.ContMgrSignal, &args, nil); err != nil {
 		return fmt.Errorf("signaling container %q PID %d: %v", cid, pid, err)
+	}
+	return nil
+}
+
+// SignalProcessGroup sends the signal to all processes in the process group
+// identified by pgid. pgid is relative to the root PID namespace.
+func (s *Sandbox) SignalProcessGroup(cid string, pgid int32, sig unix.Signal) error {
+	log.Debugf("Signal sandbox %q process group %d", s.ID, pgid)
+
+	args := boot.SignalArgs{
+		CID:   cid,
+		Signo: int32(sig),
+		PID:   pgid,
+		Mode:  boot.DeliverToProcessGroup,
+	}
+	if err := s.call(boot.ContMgrSignal, &args, nil); err != nil {
+		return fmt.Errorf("signaling container %q PGID %d: %v", cid, pgid, err)
 	}
 	return nil
 }

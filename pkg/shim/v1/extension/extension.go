@@ -29,7 +29,7 @@ var NewExtension func(ctx context.Context, next TaskServiceExt, req *task.Create
 // NewPodExtension registers an extension constructor which is used when grouping is enabled.
 // It may return nil, nil to indicate that the extension should not handle this task request.
 // Returning an error will fail the task request.
-var NewPodExtension func(ctx context.Context, next TaskServiceExt) (TaskServiceExt, error)
+var NewPodExtension func(ctx context.Context, next TaskServiceExt, req *task.CreateTaskRequest) (TaskServiceExt, error)
 
 // FSRestoreConfig is the configuration for a FS restore request.
 type FSRestoreConfig struct {
@@ -68,7 +68,6 @@ type RestoreRequest struct {
 // TaskServiceExt extends TaskRequest with extra functionality required by the shim.
 type TaskServiceExt interface {
 	task.TaskService
-	Cleanup(ctx context.Context) (*task.DeleteResponse, error)
 	CreateWithFSRestore(ctx context.Context, req *CreateWithFSRestoreRequest) (*task.CreateTaskResponse, error)
 	Restore(ctx context.Context, req *RestoreRequest) (*task.StartResponse, error)
 }
