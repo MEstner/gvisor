@@ -19,6 +19,10 @@
 
 #define SRET WORD $0x10200073
 
+// HRET: Return from HS-Mode (H-Extension)
+// Opcode: 0x20200073
+#define HRET WORD $0x20200073
+
 #define PTRACE_REGS	0 // +checkoffset linux PtraceRegs.Regs
 #define PTRACE_PC	(PTRACE_REGS + 0*8)
 #define PTRACE_RA	(PTRACE_REGS + 1*8)
@@ -257,17 +261,17 @@ TEXT ·Halt(SB),NOSPLIT,$0
 TEXT ·kernelExitToSupervisor(SB),NOSPLIT,$0
 	WORD	$0x14021273 // csrrw tp, sscratch, tp
 	MOV	CPU_REGISTERS+PTRACE_PC(TP), A1
-	WORD	$0x14159073 // csrw sepc, a1
-	WORD	$0x100025f3 // csrr a1, sstatus
+	WORD	$0x14159073 // csrw hepc, a1  // H-Extension: use hepc instead of sepc
+	WORD	$0x100025f3 // csrr a1, hstatus  // H-Extension: read hstatus instead of sstatus
 	ORI	$0x100, A1 // set SPP=1
 	MOV	$0x20, A2
 	NOT	A2
 	AND	A2, A1 // set SPIE=0
 	ORI     $0x6000, A1 // set fs
-	WORD	$0x10059073 // csrw sstatus, a1
+	WORD	$0x10059073 // csrw hstatus, a1  // H-Extension: write hstatus instead of sstatus
 
 	MOV	CPU_SATP_KVM(TP), A1
-	WORD	$0x18059073 // csrw satp, a1	
+	WORD	$0x18059073 // csrw hgatp, a1  // H-Extension: use hgatp for nested page tables	
 
 	// Save floating point state. CPU.floatingPointState is a slice, so the
 	// first word of CPU.floatingPointState is a pointer to the destination
@@ -278,7 +282,7 @@ TEXT ·kernelExitToSupervisor(SB),NOSPLIT,$0
 
 	// load sentry's tls
 	MOV	CPU_REGISTERS+PTRACE_TP(TP), TP
-	SRET
+	HRET  // H-Extension: use HRET instead of SRET
 
 TEXT ·kernelExitToUser(SB),NOSPLIT,$0
 	// Step1, save sentry context into memory.
@@ -306,7 +310,7 @@ TEXT ·doKernelExitToUser(SB),NOSPLIT,$0
 	MOV	CPU_APP_ASID(TP), A2
 	SLLI	$44, A2, A3
 	OR	A3, A1, A1
-	WORD	$0x18059073 // csrw satp, a1	
+	WORD	$0x18059073 // csrw vsatp, a1  // H-Extension: use vsatp for VS-Mode guests
 
 	// load app context pointer.
 	MOV	CPU_APP_ADDR(TP), T0
@@ -314,15 +318,15 @@ TEXT ·doKernelExitToUser(SB),NOSPLIT,$0
 	// prepare the environment for container application.
 	// set pc
 	MOV	PTRACE_PC(T0), A1
-	WORD	$0x14159073 // csrw sepc, a1
-	// set sstatus
-	WORD	$0x100025f3 // csrr a1, sstatus
+	WORD	$0x14159073 // csrw vsepc, a1  // H-Extension: use vsepc for VS-Mode
+	// set sstatus / vsstatus
+	WORD	$0x100025f3 // csrr a1, vsstatus  // H-Extension: read vsstatus for VS-Mode
 	MOV	$0x100, A2
 	NOT	A2, A2
 	AND	A1, A2, A1 // set SPP=0
 	ORI	$0x20, A1 // set SPIE=1
 	ORI     $0x6000, A1 // set fs
-	WORD	$0x10059073 // csrw sstatus, a1
+	WORD	$0x10059073 // csrw vsstatus, a1  // H-Extension: write vsstatus for VS-Mode
 	MOV	CPU_APP_FPSTATE(TP), T1
 	FPREGS_LOAD(T1)
 	REGISTERS_LOAD_EXCEPT_T0(T0, 0)
@@ -330,7 +334,7 @@ TEXT ·doKernelExitToUser(SB),NOSPLIT,$0
 	MOV	PTRACE_TP(T0), TP
 	MOV	PTRACE_T0(T0), T0
 
-	SRET
+	SRET  // Note: Uses SRET for VS-Mode guests (VS-Mode SRET semantics)
 
 TEXT ·HaltEcallAndResume(SB),NOSPLIT,$0
 	MOV	CPU_SELF(TP), T0
