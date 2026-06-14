@@ -55,7 +55,7 @@ func (c *vCPU) initArchState() error {
 
 	// isa
 	reg.id = _KVM_RISCV64_REGS_ISA
-	data   = _RISCV64_ISA_GC
+	data = _RISCV64_ISA_GC
 	if err := c.setOneRegister(&reg); err != nil {
 		return err
 	}
@@ -106,7 +106,7 @@ func (c *vCPU) initArchState() error {
 	// stvec
 	reg.id = _KVM_RISCV64_REGS_STVEC
 	vectorLocation := ring0.AddrOfVectors()
-	data = uint64(ring0.KernelStartAddress | vectorLocation &^ 0x3)
+	data = uint64(ring0.KernelStartAddress | vectorLocation&^0x3)
 	if err := c.setOneRegister(&reg); err != nil {
 		return err
 	}
@@ -115,6 +115,67 @@ func (c *vCPU) initArchState() error {
 	// the MMIO address base.
 	vectorLocationPhys, _, _ := translateToPhysical(vectorLocation)
 	riscv64HypercallMMIOBase = vectorLocationPhys
+
+	// ===== H-Extension Register Initialization =====
+	// Initialize HS-Mode registers for nested virtualization support
+
+	// hstatus: HS-Mode Status Register
+	// Set HUPMIE (HUP Mode Interrupt Enable) and GVA (Guest Virtual Address)
+	reg.id = _KVM_RISCV64_REGS_HSTATUS
+	data = _HSTATUS_HUPMIE | _HSTATUS_GVA
+	if err := c.setOneRegister(&reg); err != nil {
+		return fmt.Errorf("setting hstatus: %v", err)
+	}
+
+	// hedeleg: Exception Delegation Register
+	// Delegate user-mode exceptions to VS-Mode guests
+	// Bits: 0 (InstructionMisaligned), 1 (InstructionAccessFault), 2 (IllegalInstruction),
+	//       3 (Breakpoint), 4 (LoadMisaligned), 5 (LoadAccessFault), 6 (StoreMisaligned),
+	//       7 (StoreAccessFault), 8 (UserEcall), 12 (InstructionPageFault),
+	//       13 (LoadPageFault), 15 (StorePageFault)
+	reg.id = _KVM_RISCV64_REGS_HEDELEG
+	data = (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) |
+		(1 << 8) | (1 << 12) | (1 << 13) | (1 << 15)
+	if err := c.setOneRegister(&reg); err != nil {
+		return fmt.Errorf("setting hedeleg: %v", err)
+	}
+
+	// hideleg: Interrupt Delegation Register
+	// Delegate all S-Mode interrupts to VS-Mode
+	// Bits 1, 5, 9 = SSIP, STIP, SEIP
+	reg.id = _KVM_RISCV64_REGS_HIDELEG
+	data = (1 << 1) | (1 << 5) | (1 << 9)
+	if err := c.setOneRegister(&reg); err != nil {
+		return fmt.Errorf("setting hideleg: %v", err)
+	}
+
+	// hgatp: Guest Address Translation and Protection
+	// Configure nested page table for VS-Mode guests
+	// Mode: SV39X (0x8), VMID: 0 (for now), PPN: kernel page table physical address
+	reg.id = _KVM_RISCV64_REGS_HGATP
+	satpValue := c.machine.kernel.PageTables.SATP(false, 0)
+	// Extract the physical page number from SATP and create HGATP value
+	kernelPageTablePPN := satpValue & 0xFFFFFFFFFFF // Extract PPN (bits 43:0)
+	data = _HGATP_MODE_SV39X | (0 << _HGATP_VMID_SHIFT) | kernelPageTablePPN
+	if err := c.setOneRegister(&reg); err != nil {
+		return fmt.Errorf("setting hgatp: %v", err)
+	}
+
+	// htvec: HS-Mode Trap Vector Register
+	// Set to same location as stvec
+	reg.id = _KVM_RISCV64_REGS_HTVEC
+	data = uint64(ring0.KernelStartAddress | vectorLocation&^0x3)
+	if err := c.setOneRegister(&reg); err != nil {
+		return fmt.Errorf("setting htvec: %v", err)
+	}
+
+	// hscratch: HS-Mode Scratch Register
+	// Used for temporary storage during traps
+	reg.id = _KVM_RISCV64_REGS_HSCRATCH
+	data = uint64(reflect.ValueOf(&c.CPU).Pointer() | ring0.KernelStartAddress)
+	if err := c.setOneRegister(&reg); err != nil {
+		return fmt.Errorf("setting hscratch: %v", err)
+	}
 
 	// Initialize the PCID database.
 	if hasGuestPCID {
