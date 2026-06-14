@@ -142,7 +142,53 @@ func bluepillReadyStopGuest(c *vCPU) bool {
 
 // bluepillArchHandleExit checks architecture specific exitcode.
 //
+// This handles RISC-V specific exit reasons including KVM_EXIT_RISCV_SBI
+// for Supervisor Binary Interface calls from VS-Mode guests.
+//
 //go:nosplit
 func bluepillArchHandleExit(c *vCPU, context unsafe.Pointer) {
-	c.die(bluepillArchContext(context), "unknown")
+	switch c.runData.exitReason {
+	case _KVM_EXIT_RISCV_SBI:
+		// Handle SBI calls from VS-Mode or HS-Mode guests
+		archCtx := bluepillArchContext(context)
+		if handleRiscvSBI(c, archCtx) {
+			// SBI call was handled successfully, continue guest execution
+			return
+		}
+		// If SBI call handling failed, die with error
+		c.die(archCtx, "sbi_error")
+		return
+	default:
+		c.die(bluepillArchContext(context), "unknown")
+	}
+}
+
+// handleRiscvSBI processes RISC-V Supervisor Binary Interface (SBI) calls.
+//
+// SBI calls are used by VS-Mode guests to request services from the
+// hypervisor (HS-Mode). Common SBI extensions include:
+// - EXT_TIMER: Set timer interrupts
+// - EXT_IPI: Inter-Processor Interrupts
+// - EXT_RFENCE: Remote TLB fence operations
+// - EXT_HSM: Hart State Management
+//
+// Returns true if the call was handled successfully, false otherwise.
+//
+//go:nosplit
+func handleRiscvSBI(c *vCPU, archCtx *arch.SignalContext64) bool {
+	// Extract SBI extension ID from A7 register and function ID from A6
+	// A7 contains the extension ID
+	// A6 contains the function ID
+	// Parameters passed in A0-A5
+	// Return values passed back in A0-A1
+
+	extID := archCtx.Regs[17]  // a7 register
+	funcID := archCtx.Regs[16] // a6 register
+
+	// Call the main SBI processor
+	// Convert SignalContext regs to arch.Registers format for dispatch
+	regs := (*arch.Registers)(unsafe.Pointer(&archCtx.Regs))
+	processSBICall(extID, funcID, regs)
+
+	return true
 }
