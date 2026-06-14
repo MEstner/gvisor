@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build riscv64 
+//go:build riscv64
 // +build riscv64
 
 package pagetables
@@ -40,7 +40,7 @@ type archPageTables struct {
 //
 //go:nosplit
 func (p *PageTables) SATP(noFlush bool, asid uint16) uint64 {
-	return ((uint64(p.rootPhysical)>>satpPPNOffset)&satpPPNMask) | (uint64(asid)<<satpASIDOffset) | uint64(satpMode)
+	return ((uint64(p.rootPhysical) >> satpPPNOffset) & satpPPNMask) | (uint64(asid) << satpASIDOffset) | uint64(satpMode)
 }
 
 // MapOpts are riscv64 options.
@@ -62,29 +62,29 @@ type MapOpts struct {
 type PTE uintptr
 
 // Bits in page table entries.
-// Reference: 
+// Reference:
 // riscv-privileged-v1.10.pdf
 // arch/riscv/include/asm/pgtable-bits.h
 const (
 	// R/W access permission
 	//typeTable   = 0x3 << 1
-	typeSect      = pteValid | readable | executable
+	typeSect = pteValid | readable | executable
 	//typePage    = 0x3 << 1
-	pteValid      = 0x1 << 0
-	present       = pteValid
+	pteValid = 0x1 << 0
+	present  = pteValid
 	//pteTableBit = 0x1 << 1
 	//pteTypeMask = 0x3 << 0
 	//present     = pteValid | pteTableBit
-	readable    = 0x1 << 1
-	writable    = 0x1 << 2
-	executable  = 0x1 << 3
-	user        = 0x1 << 4
-	global      = 0x1 << 5
-	accessed    = 0x1 << 6
-	dirty       = 0x1 << 7
+	readable   = 0x1 << 1
+	writable   = 0x1 << 2
+	executable = 0x1 << 3
+	user       = 0x1 << 4
+	global     = 0x1 << 5
+	accessed   = 0x1 << 6
+	dirty      = 0x1 << 7
 
-	typeTable   = 0x1 << 0
-	pageOffset  = 12
+	typeTable  = 0x1 << 0
+	pageOffset = 12
 )
 
 const (
@@ -121,7 +121,7 @@ func (p *PTE) Set(addr uintptr, opts MapOpts) {
 
 	if opts.AccessType.Execute {
 		v |= executable
-	} 
+	}
 
 	if opts.AccessType.Write {
 		v |= writable
@@ -180,14 +180,14 @@ func (p *PTE) SetSect() {
 		// This is not allowed.
 		panic("SetSect called on valid page!")
 	}
-	atomic.StoreUintptr((*uintptr)(p), protDefault | readable)
+	atomic.StoreUintptr((*uintptr)(p), protDefault|readable)
 }
 
 // IsSect returns true iff this page is a sect page.
 //
 //go:nosplit
 func (p *PTE) IsSect() bool {
-	return atomic.LoadUintptr((*uintptr)(p)) & (executable | readable) != 0
+	return atomic.LoadUintptr((*uintptr)(p))&(executable|readable) != 0
 }
 
 // setPageTable sets this PTE value and forces the write bit and sect bit to
@@ -227,8 +227,8 @@ const (
 	pgdSize = 1 << pgdShift
 
 	satpASIDOffset = 44
-	satpPPNOffset = 12
-	satpPPNMask   = 0xfffffffffff
+	satpPPNOffset  = 12
+	satpPPNMask    = 0xfffffffffff
 	// Sv48
 	satpMode = 0x9000000000000000
 
@@ -270,3 +270,89 @@ func (p *PageTables) cloneUpperShared() {
 
 // PTEs is a collection of entries.
 type PTEs [entriesPerPage]PTE
+
+// ============================================
+// H-Extension Guest Address Translation Support
+// ============================================
+
+// HGATP returns the Guest Address Translation and Protection register value
+// for nested virtualization in H-Extension mode.
+//
+// HGATP structure:
+// - Bits [63]: MODE (1 = SV39X, 0 = BARE)
+// - Bits [62:44]: VMID (Virtual Machine ID)
+// - Bits [43:0]: PPN (Physical Page Number of guest page tables)
+//
+// This enables VS-Mode guests to use their own page tables under HS-Mode
+// hypervisor control through first-stage (HGATP) and second-stage page walks.
+//
+//go:nosplit
+func (p *PageTables) HGATP(vmid uint16) uint64 {
+	// Build HGATP value with SV39X mode and given VMID
+	// Mode bits (63:60): 0x8 = SV39X (two-level guest address translation)
+	// VMID bits (59:44): Virtual machine identifier
+	// PPN bits (43:0): Physical page number of root guest page table
+
+	const (
+		hgatpModeShift = 60
+		hgatpModeSV39X = 0x8
+		hgatpVMIDShift = 44
+		hgatpVMIDMask  = 0xFFFF
+		hgatpPPNMask   = 0x0FFFFFFFFFFFFFFF
+	)
+
+	// Extract physical page number from root page table physical address
+	ppn := (uint64(p.rootPhysical) >> satpPPNOffset) & hgatpPPNMask
+
+	// Build HGATP: MODE (63:60) | VMID (59:44) | PPN (43:0)
+	hgatp := (uint64(hgatpModeSV39X) << hgatpModeShift) |
+		(uint64(vmid&hgatpVMIDMask) << hgatpVMIDShift) |
+		ppn
+
+	return hgatp
+}
+
+// GuestPageFaultHandler handles page faults from VS-Mode guests.
+//
+// This is called when a guest page translation fails. The fault may be:
+// - First-stage fault (guest SATP translation fails)
+// - Second-stage fault (hypervisor HGATP translation fails)
+//
+// Parameters:
+// - gpa: Guest Physical Address that caused the fault
+// - gva: Guest Virtual Address (if available)
+// - faultType: Type of access that caused fault (instruction/load/store)
+//
+// Returns true if fault was handled, false if it should propagate to guest.
+//
+//go:nosplit
+func (p *PageTables) GuestPageFaultHandler(gpa uintptr, gva uintptr, faultType uint32) bool {
+	// TODO: Implement guest page fault handling
+	// 1. Check if faultType is one of:
+	//    - 0x14: Guest Instruction Page Fault
+	//    - 0x15: Guest Load Page Fault
+	//    - 0x16: Guest Store Page Fault
+	// 2. Translate GPA to host physical address
+	// 3. Allocate physical page if needed
+	// 4. Update guest HGATP entries
+	// 5. Return true if resolved
+
+	return false
+}
+
+// IsGuestPageFault checks if the trap is a guest page fault
+//
+// Guest page faults have exception codes:
+// - 0x14: Guest Instruction Page Fault
+// - 0x15: Guest Load Page Fault
+// - 0x16: Guest Store Page Fault
+//
+//go:nosplit
+func IsGuestPageFault(trapValue uint64) bool {
+	switch trapValue {
+	case 0x14, 0x15, 0x16:
+		return true
+	default:
+		return false
+	}
+}
