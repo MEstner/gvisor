@@ -82,6 +82,9 @@ go_library(
         "syscall_thread_riscv64.go",
         "sysmsg_thread_riscv64.go",
         "systrap_riscv64.go",
+            "ptrace_sysemu_amd64.go",
+            "ptrace_sysemu_arm64.go",
+            "ptrace_sysemu_riscv64.go",
     ],
     visibility = ["//:sandbox"],
     deps = [
