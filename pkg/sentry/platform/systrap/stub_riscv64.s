@@ -22,6 +22,7 @@
 #define SIGKILL		 9   // +checkconst unix SIGKILL
 #define SIGSTOP		 19  // +checkconst unix SIGSTOP
 #define SYS_PRCTL	 167 // +checkconst unix SYS_PRCTL
+#define SYS_EXIT_GROUP   94  // +checkconst unix SYS_EXIT_GROUP
 #define PR_SET_PDEATHSIG 1   // +checkconst unix PR_SET_PDEATHSIG
 
 #define SYS_FUTEX	 98 // +checkconst unix SYS_FUTEX
@@ -30,6 +31,7 @@
 
 #define NEW_STUB	 1 // +checkconst . _NEW_STUB
 #define RUN_SYSCALL_LOOP 5 // +checkconst . _RUN_SYSCALL_LOOP
+#define RUN_SECCOMP_LOOP 6 // +checkconst . _RUN_SECCOMP_LOOP
 
 // syscallSentryMessage offsets.
 #define SENTRY_MESSAGE_STATE 0  // +checkoffset . syscallSentryMessage.state
@@ -184,6 +186,26 @@ wake_up_sentry:
 
 	ADDI $1, S10, S10
 	JMP syscall_loop
+
+seccomp_loop:
+    // Trigger a seccomp notification.
+    MOV $SYS_EXIT_GROUP, A7
+    ECALL
+
+    // Execute the syscall programmed by the sentry.
+    MOV  SENTRY_MESSAGE_SYSNO(S9), A7
+    MOV  SENTRY_MESSAGE_ARG0(S9), A0
+    MOV  SENTRY_MESSAGE_ARG1(S9), A1
+    MOV  SENTRY_MESSAGE_ARG2(S9), A2
+    MOV  SENTRY_MESSAGE_ARG3(S9), A3
+    MOV  SENTRY_MESSAGE_ARG4(S9), A4
+    MOV  SENTRY_MESSAGE_ARG5(S9), A5
+    ECALL
+
+    // Store the return value.
+    MOV A0, (STUB_MESSAGE_OFFSET + STUB_MESSAGE_RET)(S9)
+
+    JMP seccomp_loop
 
 // func addrOfInitStubProcess() uintptr
 TEXT ·addrOfInitStubProcess(SB), $0-8
