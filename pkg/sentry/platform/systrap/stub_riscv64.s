@@ -97,6 +97,9 @@ begin:
 	MOV $RUN_SYSCALL_LOOP, T0
 	BEQ T0, S8, syscall_loop
 
+	MOV $RUN_SECCOMP_LOOP, T0
+	BEQ T0, S8, seccomp_loop
+
 done:
 	// Notify the Sentry that syscall exited.
 	EBREAK
