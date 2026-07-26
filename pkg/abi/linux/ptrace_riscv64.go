@@ -24,7 +24,8 @@ package linux
 // +stateify savable
 type PtraceRegs struct {
 	// user_regs_struct
-	Regs   [33]uint64
+	//change to 32 registers for riscv64 without orig_a0 included
+	Regs [32]uint64
 }
 
 // InstructionPointer returns the address of the next instruction to be
@@ -35,7 +36,7 @@ func (p *PtraceRegs) InstructionPointer() uint64 {
 
 // StackPointer returns the address of the Stack pointer.
 func (p *PtraceRegs) StackPointer() uint64 {
-	return p.Regs[2];
+	return p.Regs[2]
 }
 
 // SetStackPointer sets the stack pointer to the specified value.

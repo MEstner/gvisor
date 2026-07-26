@@ -20,3 +20,17 @@ __export_restore_rt:
   li a7, __NR_rt_sigreturn
   ecall
 .size __export_restore_rt,.-__export_restore_rt
+
+.global __export_restore_rt_from_frame;
+.type __export_restore_rt_from_frame, @function;
+// __export_restore_rt_from_frame performs rt_sigreturn after switching SP
+// back to the kernel-created struct rt_sigframe.
+//
+// a0 is &rt_sigframe.info. info is the first field in rt_sigframe, so a0 is
+// also the address of the complete frame.
+__export_restore_rt_from_frame:
+  mv sp, a0
+  li a7, __NR_rt_sigreturn
+  ecall
+  // rt_sigreturn does not return. Trap if it unexpectedly does.
+  ebreak

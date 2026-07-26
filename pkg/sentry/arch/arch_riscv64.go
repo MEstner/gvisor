@@ -21,17 +21,17 @@ import (
 	"fmt"
 	"io"
 
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/cpuid"
-	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/hostarch"
 	"gvisor.dev/gvisor/pkg/marshal"
 	"gvisor.dev/gvisor/pkg/marshal/primitive"
 	"gvisor.dev/gvisor/pkg/rand"
-	"gvisor.dev/gvisor/pkg/sentry/limits"
-	"gvisor.dev/gvisor/pkg/errors/linuxerr"
 	"gvisor.dev/gvisor/pkg/sentry/arch/fpu"
 	rpb "gvisor.dev/gvisor/pkg/sentry/arch/registers_go_proto"
+	"gvisor.dev/gvisor/pkg/sentry/limits"
 )
 
 // Host specifies the host architecture.
@@ -333,29 +333,29 @@ func (s State) Proto() *rpb.Registers {
 		T2:     s.Regs.Regs[7],
 		S0:     s.Regs.Regs[8],
 		S1:     s.Regs.Regs[9],
-		A0:    s.Regs.Regs[10],
-		A1:    s.Regs.Regs[11],
-		A2:    s.Regs.Regs[12],
-		A3:    s.Regs.Regs[13],
-		A4:    s.Regs.Regs[14],
-		A5:    s.Regs.Regs[15],
-		A6:    s.Regs.Regs[16],
-		A7:    s.Regs.Regs[17],
-		S2:    s.Regs.Regs[18],
-		S3:    s.Regs.Regs[19],
-		S4:    s.Regs.Regs[20],
-		S5:    s.Regs.Regs[21],
-		S6:    s.Regs.Regs[22],
-		S7:    s.Regs.Regs[23],
-		S8:    s.Regs.Regs[24],
-		S9:    s.Regs.Regs[25],
+		A0:     s.Regs.Regs[10],
+		A1:     s.Regs.Regs[11],
+		A2:     s.Regs.Regs[12],
+		A3:     s.Regs.Regs[13],
+		A4:     s.Regs.Regs[14],
+		A5:     s.Regs.Regs[15],
+		A6:     s.Regs.Regs[16],
+		A7:     s.Regs.Regs[17],
+		S2:     s.Regs.Regs[18],
+		S3:     s.Regs.Regs[19],
+		S4:     s.Regs.Regs[20],
+		S5:     s.Regs.Regs[21],
+		S6:     s.Regs.Regs[22],
+		S7:     s.Regs.Regs[23],
+		S8:     s.Regs.Regs[24],
+		S9:     s.Regs.Regs[25],
 		S10:    s.Regs.Regs[26],
 		S11:    s.Regs.Regs[27],
-		T3:    s.Regs.Regs[28],
-		T4:    s.Regs.Regs[29],
-		T5:    s.Regs.Regs[30],
-		T6:    s.Regs.Regs[31],
-		OrigA0:s.Regs.Regs[32],
+		T3:     s.Regs.Regs[28],
+		T4:     s.Regs.Regs[29],
+		T5:     s.Regs.Regs[30],
+		T6:     s.Regs.Regs[31],
+		OrigA0: s.OrigA0,
 		//Pstate: s.Regs.Sstatus,
 		//Tls:    s.Regs.Tp,
 	}
@@ -406,29 +406,29 @@ func (s *State) RegisterMap() (map[string]uintptr, error) {
 		"T2":     uintptr(s.Regs.Regs[7]),
 		"S0":     uintptr(s.Regs.Regs[8]),
 		"S1":     uintptr(s.Regs.Regs[9]),
-		"A0":    uintptr(s.Regs.Regs[10]),
-		"A1":    uintptr(s.Regs.Regs[11]),
-		"A2":    uintptr(s.Regs.Regs[12]),
-		"A3":    uintptr(s.Regs.Regs[13]),
-		"A4":    uintptr(s.Regs.Regs[14]),
-		"A5":    uintptr(s.Regs.Regs[15]),
-		"A6":    uintptr(s.Regs.Regs[16]),
-		"A7":    uintptr(s.Regs.Regs[17]),
-		"S2":    uintptr(s.Regs.Regs[18]),
-		"S3":    uintptr(s.Regs.Regs[19]),
-		"S4":    uintptr(s.Regs.Regs[20]),
-		"S5":    uintptr(s.Regs.Regs[21]),
-		"S6":    uintptr(s.Regs.Regs[22]),
-		"S7":    uintptr(s.Regs.Regs[23]),
-		"S8":    uintptr(s.Regs.Regs[24]),
-		"S9":    uintptr(s.Regs.Regs[25]),
+		"A0":     uintptr(s.Regs.Regs[10]),
+		"A1":     uintptr(s.Regs.Regs[11]),
+		"A2":     uintptr(s.Regs.Regs[12]),
+		"A3":     uintptr(s.Regs.Regs[13]),
+		"A4":     uintptr(s.Regs.Regs[14]),
+		"A5":     uintptr(s.Regs.Regs[15]),
+		"A6":     uintptr(s.Regs.Regs[16]),
+		"A7":     uintptr(s.Regs.Regs[17]),
+		"S2":     uintptr(s.Regs.Regs[18]),
+		"S3":     uintptr(s.Regs.Regs[19]),
+		"S4":     uintptr(s.Regs.Regs[20]),
+		"S5":     uintptr(s.Regs.Regs[21]),
+		"S6":     uintptr(s.Regs.Regs[22]),
+		"S7":     uintptr(s.Regs.Regs[23]),
+		"S8":     uintptr(s.Regs.Regs[24]),
+		"S9":     uintptr(s.Regs.Regs[25]),
 		"S10":    uintptr(s.Regs.Regs[26]),
 		"S11":    uintptr(s.Regs.Regs[27]),
-		"T3":    uintptr(s.Regs.Regs[28]),
-		"T4":    uintptr(s.Regs.Regs[29]),
-		"T5":    uintptr(s.Regs.Regs[30]),
+		"T3":     uintptr(s.Regs.Regs[28]),
+		"T4":     uintptr(s.Regs.Regs[29]),
+		"T5":     uintptr(s.Regs.Regs[30]),
 		"T6":     uintptr(s.Regs.Regs[31]),
-		"OrigA0":     uintptr(s.Regs.Regs[32]),
+		"OrigA0": uintptr(s.OrigA0),
 	}, nil
 }
 
@@ -454,9 +454,9 @@ func (s *State) PtraceSetRegs(src io.Reader) (int, error) {
 	}
 	regs.UnmarshalUnsafe(buf)
 	/*
-	if !regs.validRegs() {
-		return 0, linuxerr.EINVAL
-	}
+		if !regs.validRegs() {
+			return 0, linuxerr.EINVAL
+		}
 	*/
 	s.Regs = regs
 	return ptraceRegistersSize, nil

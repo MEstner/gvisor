@@ -21,9 +21,10 @@ const restartSyscallNr = uintptr(128)
 
 // SyscallSaveOrig save the value of the register which is clobbered in
 // syscall handler(doSyscall()).
-//
+// RISC-V register index 10 is the real a0 register
+// and a0 contains syscall argument 0 when the syscall is intercepted.
 func (c *Context64) SyscallSaveOrig() {
-	c.OrigA0 = c.Regs.Regs[32]
+	c.OrigA0 = c.Regs.Regs[10]
 }
 
 // SyscallNo returns the syscall number according to the 64-bit convention.

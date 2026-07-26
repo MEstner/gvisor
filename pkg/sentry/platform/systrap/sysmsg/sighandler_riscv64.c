@@ -29,14 +29,15 @@
 #include "sysmsg.h"
 #include "sysmsg_offsets.h"
 
-// TODO: workaround, need to figure out the reason
-#define CTX_OFFSET 0x50
 
 // TODO(b/271631387): These globals are shared between AMD64 and ARM64; move to
 // sysmsg_lib.c.
 struct arch_state __export_arch_state;
 uint64_t __export_stub_start;
 uint64_t __export_disable_syscall_patching;
+
+__attribute__((noreturn))
+void __export_restore_rt_from_frame(void *frame);
 
 long __syscall(long n, long a1_, long a2_, long a3_, long a4_, long a5_, long a6_) {
   // RISCV syscall interface passes the syscall number in a7 and the 6 arguments
@@ -82,7 +83,7 @@ static void gregs_to_ptregs(ucontext_t *ucontext,
 
 static void ptregs_to_gregs(ucontext_t *ucontext,
                             struct user_regs_struct *ptregs) {
-  memcpy((uint8_t *)(ucontext->uc_mcontext.__gregs)-CTX_OFFSET, (uint8_t *)ptregs, NGREG * sizeof(unsigned long int));
+  memcpy((uint8_t *)(ucontext->uc_mcontext.__gregs), (uint8_t *)ptregs, NGREG * sizeof(unsigned long int));
 }
 
 void __export_start(struct sysmsg *sysmsg, void *_ucontext) {
@@ -161,8 +162,11 @@ init:
     ctx->fpstate_changed = 1;
   }
   restore_state(sysmsg, ctx, _ucontext);
-  // riscv64: call sigreturn directly here
-  __syscall(__NR_rt_sigreturn, 0, 0, 0, 0, 0, 0);
+
+  // Linux passes &rt_sigframe.info as the second signal-handler argument.
+  // Since info is the first field in rt_sigframe, siginfo is also the frame
+  // address expected in SP by rt_sigreturn.
+  __export_restore_rt_from_frame(siginfo);
 }
 
 void restore_state(struct sysmsg *sysmsg, struct thread_context *ctx,
@@ -170,7 +174,7 @@ void restore_state(struct sysmsg *sysmsg, struct thread_context *ctx,
   ucontext_t *ucontext = _ucontext;
 
   if (atomic_load(&ctx->fpstate_changed)) {
-    memcpy((uint8_t *)&ucontext->uc_mcontext.__fpregs-CTX_OFFSET, ctx->fpstate, __export_arch_state.fp_len);
+    memcpy((uint8_t *)&ucontext->uc_mcontext.__fpregs, ctx->fpstate, __export_arch_state.fp_len);
   }
   ptregs_to_gregs(ucontext, &ctx->ptregs);
   set_tls(ctx->tls);

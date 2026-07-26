@@ -31,9 +31,8 @@ import (
 //
 // +marshal
 type SignalContext64 struct {
-	Regs      [33]uint64
-	_	  uint64
-	FpRegs    FpState 
+	Regs   [32]uint64
+	FpRegs FpState
 }
 
 // FpregsContext is equivalent to union __riscv_fp_state on riscv64
@@ -48,8 +47,8 @@ type FpState struct {
 type DState struct {
 	// d extension
 	Regs [32]uint64
-	Fcsr  uint32
-	_     uint32
+	Fcsr uint32
+	_    uint32
 }
 
 // UContext64 is equivalent to ucontext on riscv64(arch/riscv/include/uapi/asm/ucontext.h).
@@ -78,7 +77,7 @@ func (c *Context64) SignalSetup(st *Stack, act *linux.SigAction, info *linux.Sig
 		Flags: 0,
 		Stack: *alt,
 		MContext: SignalContext64{
-			Regs:   c.Regs.Regs,
+			Regs: c.Regs.Regs,
 		},
 		Sigset: sigset,
 	}
