@@ -22,29 +22,31 @@ import (
 
 // Constants for open(2).
 const (
-	O_DIRECT    = 000040000
-	O_LARGEFILE = 000100000
-	O_DIRECTORY = 000200000
-	O_NOFOLLOW  = 000400000
+	O_DIRECTORY = 000040000
+	O_NOFOLLOW  = 000100000
+	O_DIRECT    = 000200000
+	O_LARGEFILE = 000400000
 )
 
 // Stat represents struct stat.
-//
+// matches Linux’s asm-generic/stat.h
 // +marshal
 type Stat struct {
 	_       structs.HostLayout
 	Dev     uint64
 	Ino     uint64
-	Nlink   uint64
 	Mode    uint32
+	Nlink   uint32
 	UID     uint32
 	GID     uint32
-	_       int32
 	Rdev    uint64
+	_       uint64
 	Size    int64
-	Blksize int64
+	Blksize int32
+	_       int32
 	Blocks  int64
 	ATime   Timespec
 	MTime   Timespec
 	CTime   Timespec
+	_       [2]int32
 }
