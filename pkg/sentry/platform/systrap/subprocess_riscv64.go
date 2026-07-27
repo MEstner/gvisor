@@ -171,12 +171,30 @@ func probeSeccomp() bool {
 }
 
 func restoreArchSpecificState(ctx *sysmsg.ThreadContext, ac *arch.Context64) {
+	ctx.SigError = 0
 }
 
 func setArchSpecificRegs(sysThread *sysmsgThread, regs *arch.Registers) {
 }
 
 func retrieveArchSpecificState(ctx *sysmsg.ThreadContext, ac *arch.Context64) {
+	if ctx.Signo != int64(linux.SIGSEGV) {
+		return
+	}
+
+	switch {
+	case ctx.SignalInfo.Addr() == ctx.Regs.InstructionPointer():
+		ctx.SigError = 12 // Instruction page fault.
+
+	case ctx.SignalInfo.Code == 2:
+		// SEGV_ACCERR after a data access. This commonly means that an
+		// earlier read classification installed a read-only mapping and
+		// the instruction actually requires write access.
+		ctx.SigError = 15 // Store/AMO page fault.
+
+	default:
+		ctx.SigError = 13 // Load page fault.
+	}
 }
 
 func archSpecificSysmsgThreadInit(sysThread *sysmsgThread) {
@@ -187,7 +205,7 @@ func archSpecificSysmsgThreadInit(sysThread *sysmsgThread) {
 }
 
 func (s *subprocess) doFlushIcache(ac *arch.Context64) error {
-	if (!ac.FlushIcache) {
+	if !ac.FlushIcache {
 		return nil
 	}
 	ac.FlushIcache = false
