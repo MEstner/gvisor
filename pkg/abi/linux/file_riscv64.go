@@ -22,10 +22,10 @@ import (
 
 // Constants for open(2).
 const (
-	O_DIRECTORY = 000040000
-	O_NOFOLLOW  = 000100000
-	O_DIRECT    = 000200000
-	O_LARGEFILE = 000400000
+	O_DIRECT    = 000040000
+	O_LARGEFILE = 000100000
+	O_DIRECTORY = 000200000
+	O_NOFOLLOW  = 000400000
 )
 
 // Stat represents struct stat.
