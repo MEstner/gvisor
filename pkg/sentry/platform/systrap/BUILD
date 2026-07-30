@@ -1,4 +1,4 @@
-load("//tools:defs.bzl", "go_library")
+load("//tools:defs.bzl", "go_library", "go_test")
 load("//tools/go_generics:defs.bzl", "go_template_instance")
 
 package(
@@ -82,9 +82,6 @@ go_library(
         "syscall_thread_riscv64.go",
         "sysmsg_thread_riscv64.go",
         "systrap_riscv64.go",
-            "ptrace_sysemu_amd64.go",
-            "ptrace_sysemu_arm64.go",
-            "ptrace_sysemu_riscv64.go",
     ],
     visibility = ["//:sandbox"],
     deps = [
@@ -116,6 +113,16 @@ go_library(
         "//pkg/sighandling",
         "//pkg/sync",
         "//pkg/syncevent",
+        "@org_golang_x_sys//unix:go_default_library",
+    ],
+)
+
+go_test(
+    name = "systrap_test",
+    size = "small",
+    srcs = ["syscall_thread_test.go"],
+    library = ":systrap",
+    deps = [
         "@org_golang_x_sys//unix:go_default_library",
     ],
 )
