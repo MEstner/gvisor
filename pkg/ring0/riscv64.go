@@ -33,8 +33,9 @@ const (
 	// VirtualAddressBits is fixed at 48.
 	VirtualAddressBits = 48
 
-	// PhysicalAddressBits is fixed at 56.
-	PhysicalAddressBits = 56
+	// PhysicalAddressBits is limited by the Sv39x4 G-stage translation
+	// currently used by the RISC-V KVM backend.
+	PhysicalAddressBits = 39
 
 	/*
 	// DAIF bits:debug, sError, IRQ, FIQ.

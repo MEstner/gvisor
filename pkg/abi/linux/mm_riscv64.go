@@ -17,4 +17,9 @@
 package linux
 
 // TASK_SIZE for riscv64 is 2^38 (256GB).
-var feasibleTaskSizes = []uintptr{0x4000000000}
+// TASK_SIZE depends on the paging mode selected by the host kernel.
+// Sv48 provides 2^47 bytes of userspace; Sv39 provides 2^38 bytes.
+var feasibleTaskSizes = []uintptr{
+	uintptr(1) << 47,
+	uintptr(1) << 38,
+}

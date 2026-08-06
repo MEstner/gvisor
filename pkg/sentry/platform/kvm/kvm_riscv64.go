@@ -19,7 +19,7 @@ package kvm
 
 import (
 	"fmt"
-
+	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/ring0"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
@@ -55,11 +55,18 @@ type kvmVcpuEvents struct {
 func updateGlobalOnce(fd int) error {
 	err := updateSystemValues(int(fd))
 	ring0.Init()
-	physicalInit()
+	log.Infof(
+	"RISC-V ADDRESS WIDTHS: virtual=%d physical=%d",
+	ring0.VirtualAddressBits,
+	ring0.PhysicalAddressBits,
+)
 	// The linux.Task represents the possible largest task size, which the UserspaceSize shouldn't be larger than.
 	if linux.TaskSize < ring0.UserspaceSize {
-		return fmt.Errorf("gVisor doesn't support 3-level page tables on KVM platform.")
+		return fmt.Errorf("unsupported page-table size: Linux TaskSize=%#x, KVM UserspaceSize=%#x",
+		linux.TaskSize,
+		ring0.UserspaceSize)
 	}
+	physicalInit()
 	return err
 }
 
