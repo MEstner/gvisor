@@ -87,7 +87,8 @@ type machine struct {
 	tscControl bool
 
 	// usedSlots is the set of used physical addresses (not sorted).
-	usedSlots []uintptr
+	usedSlotStarts []uintptr
+	usedSlotEnds   []uintptr
 
 	// useCPUNums indicates whether to enable the use vCPU numbers as CPU numbers.
 	useCPUNums bool
@@ -303,7 +304,14 @@ func newMachine(vm int, config *Config) (*machine, error) {
 		m.maxSlots = int(maxSlots)
 	}
 	log.Debugf("The maximum number of slots is %d.", m.maxSlots)
-	m.usedSlots = make([]uintptr, m.maxSlots)
+	readOnlyMem, errno := hostsyscall.RawSyscall(unix.SYS_IOCTL, uintptr(m.fd), KVM_CHECK_EXTENSION, uintptr(81))
+	if errno != 0 {
+		log.Warningf("KVM_CAP_READONLY_MEM query failed: %v", errno)
+	} else {
+		log.Infof("KVM_CAP_READONLY_MEM: %d", readOnlyMem)
+	}
+	m.usedSlotStarts = make([]uintptr, m.maxSlots)
+	m.usedSlotEnds = make([]uintptr, m.maxSlots)
 
 	// Check TSC Scaling
 	hasTSCControl, errno := hostsyscall.RawSyscall(unix.SYS_IOCTL, uintptr(m.fd), KVM_CHECK_EXTENSION, _KVM_CAP_TSC_CONTROL)
@@ -332,15 +340,20 @@ func newMachine(vm int, config *Config) (*machine, error) {
 	// startup time overhead introduced by mapping the entire address
 	// space.
 	mapEntireAddressSpace := forceMappingEntireAddressSpace ||
-		runtime.GOARCH != "amd64"
+		(runtime.GOARCH != "amd64" && runtime.GOARCH != "riscv64")
+
+	if runtime.GOARCH == "riscv64" {
+		const riscv64FaultBlockSize = uintptr(2 << 20) // 2 MiB
+		faultBlockSize = riscv64FaultBlockSize
+		faultBlockMask = ^uintptr(riscv64FaultBlockSize - 1)
+	}
+
 	if mapEntireAddressSpace {
-		// Increase faultBlockSize to be sure that we will not reach the limit.
-		// faultBlockSize has to equal or less than KVM_MEM_MAX_NR_PAGES.
-		faultBlockSize = uintptr(1) << 42
-		faultBlockMask = ^uintptr(faultBlockSize - 1)
+		if runtime.GOARCH != "riscv64" {
+			faultBlockSize = uintptr(1) << 42
+			faultBlockMask = ^uintptr(faultBlockSize - 1)
+		}
 	} else {
-		// Install seccomp rules to trap runtime mmap system calls. They will
-		// be handled by seccompMmapHandler.
 		seccompMmapRules(m)
 	}
 
@@ -401,6 +414,15 @@ func newMachine(vm int, config *Config) (*machine, error) {
 		if excludeVirtualRegion(vr) {
 			return // skip region.
 		}
+
+		// KVM cannot use PROT_NONE VMAs as userspace memory backing.
+		// They can be mapped lazily if the runtime later replaces them
+		// with accessible mappings.
+		if !vr.accessType.Read &&
+			!vr.accessType.Write &&
+			!vr.accessType.Execute {
+			return
+		}
 		// Take into account that the stack can grow down.
 		if vr.filename == "[stack]" {
 			vr.virtual -= 1 << 20
@@ -432,20 +454,21 @@ func newMachine(vm int, config *Config) (*machine, error) {
 // This must be done via a linear scan.
 //
 //go:nosplit
-func (m *machine) hasSlot(physical uintptr) bool {
+func (m *machine) mappedSlotEnd(physical uintptr) uintptr {
 	slotLen := int(m.nextSlot.Load())
-	// When slots are being updated, nextSlot is ^uint32(0). As this situation
-	// is less likely happen, we just set the slotLen to m.maxSlots, and scan
-	// the whole usedSlots array.
 	if slotLen == int(^uint32(0)) {
 		slotLen = m.maxSlots
 	}
+
 	for i := 0; i < slotLen; i++ {
-		if p := atomic.LoadUintptr(&m.usedSlots[i]); p == physical {
-			return true
+		start := atomic.LoadUintptr(&m.usedSlotStarts[i])
+		end := atomic.LoadUintptr(&m.usedSlotEnds[i])
+
+		if physical >= start && physical < end {
+			return end
 		}
 	}
-	return false
+	return 0
 }
 
 // mapPhysical checks for the mapping of a physical range, and installs one if
@@ -455,21 +478,62 @@ func (m *machine) hasSlot(physical uintptr) bool {
 //
 //go:nosplit
 func (m *machine) mapPhysical(physical, length uintptr) {
-	for end := physical + length; physical < end; {
-		virtualStart, physicalStart, length, pr := calculateBluepillFault(physical)
+	m.mapPhysicalWithReadOnly(physical, length, false)
+}
+
+// mapPhysicalWithReadOnly maps a physical range. forceReadOnly is used for
+// dynamically created host mappings whose current mmap protection is more
+// accurate than physicalRegion.readOnly.
+//
+//go:nosplit
+func (m *machine) mapPhysicalWithReadOnly(
+	physical, length uintptr,
+	forceReadOnly bool,
+) {
+	requestedEnd := physical + length
+
+	for physical < requestedEnd {
+		if mappedEnd := m.mappedSlotEnd(physical); mappedEnd != 0 {
+			if mappedEnd > requestedEnd {
+				mappedEnd = requestedEnd
+			}
+			physical = mappedEnd
+			continue
+		}
+
+		_, blockPhysicalStart, blockLength, pr :=
+			calculateBluepillFault(physical)
 		if pr == nil {
-			// Should never happen.
 			throw("mapPhysical on unknown physical address")
-			panic("unreachable") // nogo doesn't understand throw()
+			panic("unreachable")
 		}
 
-		// Is this already mapped? Check the usedSlots.
-		if !pr.mmio && !m.hasSlot(physicalStart) {
-			m.mapMemorySlot(virtualStart, physicalStart, length, pr.readOnly)
+		slotPhysicalStart := physical
+		slotVirtualStart := pr.virtual +
+			(slotPhysicalStart - pr.physical)
+
+		blockEnd := blockPhysicalStart + blockLength
+		slotEnd := blockEnd
+		if slotEnd > requestedEnd {
+			slotEnd = requestedEnd
 		}
 
-		// Move to the next chunk.
-		physical = physicalStart + length
+		if slotEnd <= slotPhysicalStart {
+			throw("invalid KVM memory slot range")
+			panic("unreachable")
+		}
+
+		if !pr.mmio {
+			readOnly := pr.readOnly || forceReadOnly
+			m.mapMemorySlot(
+				slotVirtualStart,
+				slotPhysicalStart,
+				slotEnd-slotPhysicalStart,
+				readOnly,
+			)
+		}
+
+		physical = slotEnd
 	}
 }
 

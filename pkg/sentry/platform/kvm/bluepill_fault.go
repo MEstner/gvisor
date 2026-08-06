@@ -89,12 +89,10 @@ func (m *machine) mapMemorySlot(virtualStart, physicalStart, length uintptr, rea
 	}
 	errno := m.setMemoryRegion(int(slot), physicalStart, length, virtualStart, flags)
 	if errno == 0 {
-		// Store the physical address in the slot. This is used to
-		// avoid calls to handleBluepillFault in the future (see
-		// machine.mapPhysical).
-		atomic.StoreUintptr(&m.usedSlots[slot], physicalStart)
-		// Successfully added region; we can increment nextSlot and
-		// allow another set to proceed here.
+		// Record the complete physical range represented by this slot.
+		atomic.StoreUintptr(&m.usedSlotStarts[slot], physicalStart)
+		atomic.StoreUintptr(&m.usedSlotEnds[slot], physicalStart+length)
+
 		m.nextSlot.Store(slot + 1)
 		return
 	}
