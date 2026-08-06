@@ -19,6 +19,7 @@ package kvm
 
 import (
 	"unsafe"
+	"golang.org/x/sys/unix"
 )
 
 // seccompMmapHandler is a signal handler for runtime mmap system calls
@@ -31,10 +32,12 @@ import (
 func seccompMmapHandler(context unsafe.Pointer) {
 	mmapCallCounter.Increment()
 
-	addr, length, errno := seccompMmapSyscall(context)
+	addr, length, prot, errno := seccompMmapSyscall(context)
 	if errno != 0 {
 		return
 	}
+
+	readOnly := prot&unix.PROT_WRITE == 0
 
 	seccompMmapHandlerCnt.Add(1)
 	for i := uint32(0); i < machinePoolLen.Load(); i++ {
@@ -61,7 +64,7 @@ func seccompMmapHandler(context unsafe.Pointer) {
 			}
 
 			// Ensure the physical range is mapped.
-			m.mapPhysical(physical, length)
+			m.mapPhysicalWithReadOnly(physical, length, readOnly)
 			virtual += length
 		}
 	}

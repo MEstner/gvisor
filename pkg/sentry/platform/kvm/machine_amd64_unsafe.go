@@ -248,17 +248,26 @@ func (c *vCPU) getSystemRegisters(sregs *systemRegs) unix.Errno {
 }
 
 //go:nosplit
-func seccompMmapSyscall(context unsafe.Pointer) (uintptr, uintptr, unix.Errno) {
+func seccompMmapSyscall(context unsafe.Pointer) (uintptr, uintptr, uintptr, unix.Errno) {
 	ctx := bluepillArchContext(context)
 
-	// MAP_DENYWRITE is deprecated and ignored by kernel. We use it only for seccomp filters.
-	addr, e := hostsyscall.RawSyscall6(uintptr(ctx.Rax), uintptr(ctx.Rdi), uintptr(ctx.Rsi),
-		uintptr(ctx.Rdx), uintptr(ctx.R10)|unix.MAP_DENYWRITE, uintptr(ctx.R8), uintptr(ctx.R9))
+	length := uintptr(ctx.Rsi)
+	prot := uintptr(ctx.Rdx)
+
+	addr, e := hostsyscall.RawSyscall6(
+		uintptr(ctx.Rax),
+		uintptr(ctx.Rdi),
+		length,
+		prot,
+		uintptr(ctx.R10)|unix.MAP_DENYWRITE,
+		uintptr(ctx.R8),
+		uintptr(ctx.R9),
+	)
 	if e != 0 {
 		ctx.Rax = uint64(-e)
 	} else {
 		ctx.Rax = uint64(addr)
 	}
 
-	return addr, uintptr(ctx.Rsi), unix.Errno(e)
+	return addr, length, prot, unix.Errno(e)
 }

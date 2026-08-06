@@ -365,13 +365,22 @@ func (c *vCPU) SwitchToUser(switchOpts ring0.SwitchOpts, info *linux.SignalInfo)
 }
 
 //go:nosplit
-func seccompMmapSyscall(context unsafe.Pointer) (uintptr, uintptr, unix.Errno) {
+func seccompMmapSyscall(context unsafe.Pointer) (uintptr, uintptr, uintptr, unix.Errno) {
 	ctx := bluepillArchContext(context)
 
-	// MAP_DENYWRITE is deprecated and ignored by kernel. We use it only for seccomp filters.
-	addr, e := hostsyscall.RawSyscall6(uintptr(ctx.Regs[8]), uintptr(ctx.Regs[0]), uintptr(ctx.Regs[1]),
-		uintptr(ctx.Regs[2]), uintptr(ctx.Regs[3])|unix.MAP_DENYWRITE, uintptr(ctx.Regs[4]), uintptr(ctx.Regs[5]))
+	length := uintptr(ctx.Regs[1])
+	prot := uintptr(ctx.Regs[2])
+
+	addr, e := hostsyscall.RawSyscall6(
+		uintptr(ctx.Regs[8]),
+		uintptr(ctx.Regs[0]),
+		length,
+		prot,
+		uintptr(ctx.Regs[3])|unix.MAP_DENYWRITE,
+		uintptr(ctx.Regs[4]),
+		uintptr(ctx.Regs[5]),
+	)
 	ctx.Regs[0] = uint64(addr)
 
-	return addr, uintptr(ctx.Regs[1]), unix.Errno(e)
+	return addr, length, prot, unix.Errno(e)
 }
