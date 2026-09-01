@@ -216,3 +216,5 @@ func (m *machine) getMaxVCPU() {
 		}
 	}
 }
+
+func setHypercallMMIOBase(virtual, physical, length uintptr) {}

@@ -579,3 +579,5 @@ func (m *machine) getMaxVCPU() {
 func archPhysicalRegions(physicalRegions []physicalRegion) []physicalRegion {
 	return physicalRegions
 }
+
+func setHypercallMMIOBase(virtual, physical, length uintptr) {}

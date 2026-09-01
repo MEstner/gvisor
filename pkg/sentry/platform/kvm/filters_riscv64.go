@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build riscv64 
+//go:build riscv64
 // +build riscv64
 
 package kvm
@@ -23,8 +23,6 @@ import (
 	"gvisor.dev/gvisor/pkg/seccomp"
 )
 
-// archSyscallFilters returns arch-specific syscalls made exclusively by the
-// KVM platform.
 func (*KVM) archSyscallFilters() seccomp.SyscallRules {
 	return seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 		unix.SYS_IOCTL: seccomp.Or{
@@ -35,6 +33,14 @@ func (*KVM) archSyscallFilters() seccomp.SyscallRules {
 			seccomp.PerArg{
 				seccomp.NonNegativeFD{},
 				seccomp.EqualTo(KVM_INTERRUPT),
+			},
+			seccomp.PerArg{
+				seccomp.NonNegativeFD{},
+				seccomp.EqualTo(_KVM_GET_ONE_REG),
+			},
+			seccomp.PerArg{
+				seccomp.NonNegativeFD{},
+				seccomp.EqualTo(_KVM_SET_ONE_REG),
 			},
 		},
 	})

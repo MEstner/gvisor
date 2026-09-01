@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/abi/linux"
 	"gvisor.dev/gvisor/pkg/hostarch"
+	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/ring0"
 	"gvisor.dev/gvisor/pkg/ring0/pagetables"
 	"gvisor.dev/gvisor/pkg/sentry/platform"
@@ -43,6 +44,107 @@ func (m *machine) initArchState() error {
 
 // initArchState initializes architecture-specific state.
 func (c *vCPU) initArchState() error {
+	cpuVirtual := uintptr(unsafe.Pointer(&c.CPU))
+	cpuPhysical, _, cpuOK := translateToPhysical(cpuVirtual)
+	// Install a guest-writable virtual page backed by an otherwise unused GPA.
+	// Do not use GPA 0: nested RISC-V KVM under QEMU intermittently reports the
+	// resulting guest store-page fault as EIO instead of KVM_EXIT_MMIO.
+	const (
+		hypercallVirtual  = hostarch.PageSize
+		hypercallPhysical = uintptr(0x1_0000_0000)
+	)
+
+	c.machine.kernel.PageTables.Map(
+		hostarch.Addr(hypercallVirtual),
+		hostarch.PageSize,
+		pagetables.MapOpts{AccessType: hostarch.ReadWrite},
+		hypercallPhysical, // Deliberately absent from KVM memory slots.
+	)
+
+	riscv64HypercallMMIOBase = hypercallPhysical
+	stackKernel := uintptr(c.CPU.StackTop())
+	stackVirtual := (stackKernel & ring0.MaximumUserAddress) - 1
+	stackPhysical, _, stackOK := translateToPhysical(stackVirtual)
+
+	_, cpuBlockPhysical, _, cpuRegion :=
+		calculateBluepillFault(cpuPhysical)
+	_, stackBlockPhysical, _, stackRegion :=
+		calculateBluepillFault(stackPhysical)
+
+	printHex([]byte("RISC-V CPU virtual:"), uint64(cpuVirtual))
+	printHex([]byte("RISC-V CPU physical:"), uint64(cpuPhysical))
+	printHex(
+		[]byte("RISC-V CPU physical end:"),
+		uint64(cpuPhysical+unsafe.Sizeof(c.CPU)),
+	)
+	printHex([]byte("RISC-V CPU block:"), uint64(cpuBlockPhysical))
+
+	printHex([]byte("RISC-V stack kernel:"), uint64(stackKernel))
+	printHex([]byte("RISC-V stack virtual:"), uint64(stackVirtual))
+	printHex([]byte("RISC-V stack physical:"), uint64(stackPhysical))
+	printHex([]byte("RISC-V stack block:"), uint64(stackBlockPhysical))
+
+	log.Infof(
+		"RISC-V CPU mapping flags: cpuOK=%t cpuMMIO=%t cpuRO=%t stackOK=%t stackMMIO=%t stackRO=%t",
+		cpuOK,
+		cpuRegion != nil && cpuRegion.mmio,
+		cpuRegion != nil && cpuRegion.readOnly,
+		stackOK,
+		stackRegion != nil && stackRegion.mmio,
+		stackRegion != nil && stackRegion.readOnly,
+	)
+
+	fpState := c.CPU.FloatingPointState()
+	virtual := uintptr(unsafe.Pointer(fpState.BytePointer()))
+	remaining := uintptr(len(*fpState))
+
+	log.Infof(
+		"RISC-V kernel FP state: virtual=%#x length=%#x",
+		virtual,
+		remaining,
+	)
+
+	cpuAddress := uintptr(unsafe.Pointer(&c.CPU))
+	fpHeaderAddress := uintptr(unsafe.Pointer(fpState))
+
+	log.Infof(
+		"RISC-V CPU layout: cpu=%#x fpHeader=%#x fpOffset=%d",
+		cpuAddress,
+		fpHeaderAddress,
+		fpHeaderAddress-cpuAddress,
+	)
+	for remaining != 0 {
+		physical, length, ok := translateToPhysical(virtual)
+		log.Infof(
+			"RISC-V kernel FP mapping: virtual=%#x physical=%#x length=%#x ok=%t",
+			virtual,
+			physical,
+			length,
+			ok,
+		)
+
+		if !ok {
+			return fmt.Errorf(
+				"cannot translate floating-point state address %#x",
+				virtual,
+			)
+		}
+		if length > remaining {
+			length = remaining
+		}
+
+		log.Infof(
+			"RISC-V kernel FP slot: virtual=%#x physical=%#x length=%#x",
+			virtual,
+			physical,
+			length,
+		)
+
+		c.machine.mapPhysical(physical, length)
+
+		virtual += length
+		remaining -= length
+	}
 	var (
 		reg     kvmOneReg
 		data    uint64
@@ -56,6 +158,18 @@ func (c *vCPU) initArchState() error {
 	// isa
 	reg.id = _KVM_RISCV64_REGS_ISA
 	data = _RISCV64_ISA_GC
+	if err := c.setOneRegister(&reg); err != nil {
+		return err
+	}
+
+	// Enable floating-point extensions through the per-extension KVM API.
+	// The legacy config ISA bitmap above is retained for older kernels.
+	data = 1
+	reg.id = _KVM_RISCV64_ISA_EXT_F
+	if err := c.setOneRegister(&reg); err != nil {
+		return err
+	}
+	reg.id = _KVM_RISCV64_ISA_EXT_D
 	if err := c.setOneRegister(&reg); err != nil {
 		return err
 	}
@@ -105,78 +219,16 @@ func (c *vCPU) initArchState() error {
 
 	// stvec
 	reg.id = _KVM_RISCV64_REGS_STVEC
+
 	vectorLocation := ring0.AddrOfVectors()
-	data = uint64(ring0.KernelStartAddress | vectorLocation&^0x3)
+	vectorKernelAddress :=
+		ring0.KernelStartAddress | (vectorLocation &^ uintptr(0x3))
+
+	data = uint64(vectorKernelAddress)
 	if err := c.setOneRegister(&reg); err != nil {
 		return err
 	}
 
-	// Use the address of the exception vector table as
-	// the MMIO address base.
-	vectorLocationPhys, _, _ := translateToPhysical(vectorLocation)
-	riscv64HypercallMMIOBase = vectorLocationPhys
-	/*
-		// ===== H-Extension Register Initialization =====
-		// Initialize HS-Mode registers for nested virtualization support
-
-		// hstatus: HS-Mode Status Register
-		// Set HUPMIE (HUP Mode Interrupt Enable) and GVA (Guest Virtual Address)
-		reg.id = _KVM_RISCV64_REGS_HSTATUS
-		data = _HSTATUS_HUPMIE | _HSTATUS_GVA
-		if err := c.setOneRegister(&reg); err != nil {
-			return fmt.Errorf("setting hstatus: %v", err)
-		}
-
-		// hedeleg: Exception Delegation Register
-		// Delegate user-mode exceptions to VS-Mode guests
-		// Bits: 0 (InstructionMisaligned), 1 (InstructionAccessFault), 2 (IllegalInstruction),
-		//       3 (Breakpoint), 4 (LoadMisaligned), 5 (LoadAccessFault), 6 (StoreMisaligned),
-		//       7 (StoreAccessFault), 8 (UserEcall), 12 (InstructionPageFault),
-		//       13 (LoadPageFault), 15 (StorePageFault)
-		reg.id = _KVM_RISCV64_REGS_HEDELEG
-		data = (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) |
-			(1 << 8) | (1 << 12) | (1 << 13) | (1 << 15)
-		if err := c.setOneRegister(&reg); err != nil {
-			return fmt.Errorf("setting hedeleg: %v", err)
-		}
-
-		// hideleg: Interrupt Delegation Register
-		// Delegate all S-Mode interrupts to VS-Mode
-		// Bits 1, 5, 9 = SSIP, STIP, SEIP
-		reg.id = _KVM_RISCV64_REGS_HIDELEG
-		data = (1 << 1) | (1 << 5) | (1 << 9)
-		if err := c.setOneRegister(&reg); err != nil {
-			return fmt.Errorf("setting hideleg: %v", err)
-		}
-
-		// hgatp: Guest Address Translation and Protection
-		// Configure nested page table for VS-Mode guests
-		// Mode: SV39X (0x8), VMID: 0 (for now), PPN: kernel page table physical address
-		reg.id = _KVM_RISCV64_REGS_HGATP
-		satpValue := c.machine.kernel.PageTables.SATP(false, 0)
-		// Extract the physical page number from SATP and create HGATP value
-		kernelPageTablePPN := satpValue & 0xFFFFFFFFFFF // Extract PPN (bits 43:0)
-		data = _HGATP_MODE_SV39X | (0 << _HGATP_VMID_SHIFT) | kernelPageTablePPN
-		if err := c.setOneRegister(&reg); err != nil {
-			return fmt.Errorf("setting hgatp: %v", err)
-		}
-
-		// htvec: HS-Mode Trap Vector Register
-		// Set to same location as stvec
-		reg.id = _KVM_RISCV64_REGS_HTVEC
-		data = uint64(ring0.KernelStartAddress | vectorLocation&^0x3)
-		if err := c.setOneRegister(&reg); err != nil {
-			return fmt.Errorf("setting htvec: %v", err)
-		}
-
-		// hscratch: HS-Mode Scratch Register
-		// Used for temporary storage during traps
-		reg.id = _KVM_RISCV64_REGS_HSCRATCH
-		data = uint64(reflect.ValueOf(&c.CPU).Pointer() | ring0.KernelStartAddress)
-		if err := c.setOneRegister(&reg); err != nil {
-			return fmt.Errorf("setting hscratch: %v", err)
-		}
-	*/
 	// Initialize the PCID database.
 	if hasGuestPCID {
 		// Note that NewPCIDs may return a nil table here, in which
@@ -320,10 +372,44 @@ func (c *vCPU) SwitchToUser(switchOpts ring0.SwitchOpts, info *linux.SignalInfo)
 	appRegs := switchOpts.Registers
 	c.SetAppAddr(ring0.KernelStartAddress | uintptr(unsafe.Pointer(appRegs)))
 
-	// Past this point, stack growth can cause system calls (and a break
-	// from guest mode). So we need to ensure that between the bluepill
-	// call here and the switch call immediately below, no additional
-	// allocations occur.
+	// The active goroutine stack may have been allocated after the machine's
+	// initial memory-slot scan. Ensure its complete physical fault block is
+	// registered before returning from bluepill into Go code in guest mode.
+	stackAnchorVirtual := uintptr(unsafe.Pointer(&vector))
+	stackAnchorPhysical, _, stackAnchorOK :=
+		translateToPhysical(stackAnchorVirtual)
+	if !stackAnchorOK {
+		return hostarch.NoAccess, fmt.Errorf(
+			"cannot translate active Go stack address %#x",
+			stackAnchorVirtual,
+		)
+	}
+
+	_, stackBlockPhysical, stackBlockLength, stackRegion :=
+		calculateBluepillFault(stackAnchorPhysical)
+	if stackRegion == nil || stackBlockLength == 0 {
+		return hostarch.NoAccess, fmt.Errorf(
+			"cannot locate active Go stack physical address %#x",
+			stackAnchorPhysical,
+		)
+	}
+	if stackRegion.mmio {
+		return hostarch.NoAccess, fmt.Errorf(
+			"active Go stack address %#x is marked MMIO",
+			stackAnchorVirtual,
+		)
+	}
+
+	log.Infof(
+		"RISC-V active Go stack: virtual=%#x physical=%#x block=[%#x,%#x)",
+		stackAnchorVirtual,
+		stackAnchorPhysical,
+		stackBlockPhysical,
+		stackBlockPhysical+stackBlockLength,
+	)
+
+	c.machine.mapPhysical(stackBlockPhysical, stackBlockLength)
+
 	entersyscall()
 	bluepill(c)
 	vector = c.CPU.SwitchToUser(switchOpts)

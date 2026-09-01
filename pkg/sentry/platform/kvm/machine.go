@@ -398,7 +398,7 @@ func newMachine(vm int, config *Config) (*machine, error) {
 					pagetables.MapOpts{AccessType: vr.accessType},
 					physical)
 			}
-
+			setHypercallMMIOBase(virtual, physical, length)
 			// Ensure the physical range is mapped.
 			m.mapPhysical(physical, length)
 			virtual += length
