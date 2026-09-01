@@ -3,7 +3,7 @@
 
 #define CPU_SELF             0   // +checkoffset . CPU.self
 #define CPU_REGISTERS        216 // +checkoffset . CPU.registers
-#define CPU_FPSTATE	     480 // +checkoffset . CPU.floatingPointState
+#define CPU_FPSTATE	     472 // +checkoffset . CPU.floatingPointState
 #define CPU_ARCH_STATE       16  // +checkoffset . CPU.CPUArchState
 #define CPU_STACK_BOTTOM     CPU_ARCH_STATE+0     // +checkoffset . CPUArchState.stack
 #define CPU_STACK_TOP        CPU_STACK_BOTTOM+128 // +checksize . CPUArchState.stack
@@ -19,9 +19,6 @@
 
 #define SRET WORD $0x10200073
 
-// HRET: Return from HS-Mode (H-Extension)
-// Opcode: 0x20200073
-#define HRET WORD $0x20200073
 
 #define PTRACE_REGS	0 // +checkoffset linux PtraceRegs.Regs
 #define PTRACE_PC	(PTRACE_REGS + 0*8)
@@ -142,7 +139,7 @@
   MOVD 232(reg), F29; \
   MOVD 240(reg), F30; \
   MOVD 248(reg), F31; \
-  MOVW 256(reg), A1
+  MOVW 256(reg), A1;
   WORD $0x00359073; // fscsr a1 
 
 #define FPREGS_SAVE(reg) \
@@ -224,6 +221,7 @@
 
 TEXT ·start(SB),NOSPLIT,$0
 	JMP	·kernelExitToSupervisor(SB)
+	//JMP	·Halt(SB)
 
 // func AddrOfStart() uintptr
 TEXT ·AddrOfStart(SB), $0-8
@@ -254,35 +252,44 @@ TEXT ·Halt(SB),NOSPLIT,$0
 	//
 	// Using the same approach on ARM64, it will trigger a MMIO-EXIT by writing to
 	// a read-only space
-	WORD	$0x10502573 // csrr a0, stvec
-	MOVW	ZERO, (A0)
+	//MOV	$·vectors(SB), A0
+	//LOAD_KERNEL_ADDRESS(A0, A0)
+	// Virtual address 0x1000 is mapped by the RISC-V KVM platform to an
+	// intentionally unmapped GPA, causing KVM_EXIT_MMIO.
+	// Use fixed-width encodings here. The Plan 9 MOV pseudo-instruction was
+	// relaxed to an address ending in 0x6, which makes RISC-V KVM reject the
+	// four-byte MMIO store with EIO.
+	WORD	$0x00001537 // lui a0, 0x1: a0 = 0x1000
+	WORD	$0x00052023 // sw zero, 0(a0)
 	RET
 
 TEXT ·kernelExitToSupervisor(SB),NOSPLIT,$0
 	WORD	$0x14021273 // csrrw tp, sscratch, tp
+
 	MOV	CPU_REGISTERS+PTRACE_PC(TP), A1
-	WORD	$0x14159073 // csrw hepc, a1  // H-Extension: use hepc instead of sepc
-	WORD	$0x100025f3 // csrr a1, hstatus  // H-Extension: read hstatus instead of sstatus
-	ORI	$0x100, A1 // set SPP=1
+	WORD	$0x14159073 // csrw sepc, a1
+
+	WORD	$0x100025f3 // csrr a1, sstatus
+	ORI	$0x100, A1  // SPP=1
 	MOV	$0x20, A2
 	NOT	A2
-	AND	A2, A1 // set SPIE=0
-	ORI     $0x6000, A1 // set fs
-	WORD	$0x10059073 // csrw hstatus, a1  // H-Extension: write hstatus instead of sstatus
+	AND	A2, A1      // SPIE=0
+	ORI	$0x6000, A1 // FS=Dirty; trap entry saves floating-point registers.
+	WORD	$0x10059073 // csrw sstatus, a1
 
 	MOV	CPU_SATP_KVM(TP), A1
-	WORD	$0x18059073 // csrw hgatp, a1  // H-Extension: use hgatp for nested page tables	
+	WORD	$0x18059073 // csrw satp, a1
 
-	// Save floating point state. CPU.floatingPointState is a slice, so the
-	// first word of CPU.floatingPointState is a pointer to the destination
-	// array.
-	MOV	CPU_FPSTATE(TP), A1
-	FPREGS_LOAD(A1)
+	// KVM entry begins with the host TP in TP. The csrrw at the start of
+	// this function moves it into sscratch while obtaining the kernel CPU
+	// pointer. Restore the CPU pointer to sscratch before SRET so that the
+	// next trap vector obtains a valid kernel TP.
+	WORD	$0x14021073 // csrw sscratch, tp
+
 	REGISTERS_LOAD(TP, CPU_REGISTERS)
-
-	// load sentry's tls
 	MOV	CPU_REGISTERS+PTRACE_TP(TP), TP
-	HRET  // H-Extension: use HRET instead of SRET
+	SRET
+
 
 TEXT ·kernelExitToUser(SB),NOSPLIT,$0
 	// Step1, save sentry context into memory.
@@ -327,8 +334,8 @@ TEXT ·doKernelExitToUser(SB),NOSPLIT,$0
 	ORI	$0x20, A1 // set SPIE=1
 	ORI     $0x6000, A1 // set fs
 	WORD	$0x10059073 // csrw vsstatus, a1  // H-Extension: write vsstatus for VS-Mode
-	MOV	CPU_APP_FPSTATE(TP), T1
-	FPREGS_LOAD(T1)
+	// Nested KVM under QEMU reports F/D enabled but traps FP loads/stores.
+	// Leave application FP state untouched in this compatibility mode.
 	REGISTERS_LOAD_EXCEPT_T0(T0, 0)
 	// set tp
 	MOV	PTRACE_TP(T0), TP
@@ -362,8 +369,7 @@ TEXT ·vectors(SB),NOSPLIT,$0
 entry_from_user:
 	MOV	CPU_APP_ADDR(TP), T0
 	REGISTERS_SAVE_EXCEPT_T0(T0, 0)
-	MOV	CPU_APP_FPSTATE(TP), T1
-	FPREGS_SAVE(T1)
+	// Nested KVM compatibility mode: do not execute FP save instructions.
 	MOV	TP, T1
 	WORD	$0x14021273 // csrrw tp, sscratch, tp
 	MOV	TP, PTRACE_TP(T0)
@@ -444,11 +450,7 @@ handle_user_ecall:
 entry_from_supervisor:
 	MOV CPU_STACK_TOP-8(TP), T0
 	REGISTERS_SAVE(TP, CPU_REGISTERS)
-	// Save floating point state. CPU.floatingPointState is a slice, so the
-	// first word of CPU.floatingPointState is a pointer to the destination
-	// array.
-	MOV	CPU_FPSTATE(TP), T1
-	FPREGS_SAVE(T1)
+	// Nested KVM compatibility mode: do not execute FP save instructions.
 
 	MOV	TP, T0
 	WORD	$0x14021273 // csrrw tp, sscratch, tp
