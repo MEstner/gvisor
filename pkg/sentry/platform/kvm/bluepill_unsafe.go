@@ -154,7 +154,13 @@ func bluepillHandler(context unsafe.Pointer) {
 
 	for {
 		hostExitCounter.Increment()
+		printHex([]byte("before KVM_RUN, fd:"), uint64(c.fd))
+
 		errno := hostsyscall.RawSyscallErrno(unix.SYS_IOCTL, uintptr(c.fd), KVM_RUN, 0) // escapes: no.
+		printHex([]byte("after KVM_RUN, errno:"), uint64(errno))
+		printHex([]byte("KVM exit reason:"), uint64(c.runData.exitReason))
+		printHex([]byte("after KVM_RUN, errno:"), uint64(errno))
+
 		switch errno {
 		case 0: // Expected case.
 		case unix.EINTR:
@@ -204,6 +210,11 @@ func bluepillHandler(context unsafe.Pointer) {
 		case unix.ENOSYS:
 			bluepillHandleEnosys(c)
 			continue
+		case unix.EIO:
+			if bluepillArchHandleRunEIO(c, context) {
+				return
+			}
+			throw("run failed")
 		default:
 			throw("run failed")
 		}
@@ -242,7 +253,8 @@ func bluepillHandler(context unsafe.Pointer) {
 				return
 			}
 
-			logKVMExitReason(c, kvmExitMMIOStr)
+			captureMMIOExit(c)
+			printHex(printHexTitles[kvmExitMMIOStr], uint64(physical))
 			c.die(bluepillArchContext(context), "exit_mmio")
 			return
 		case _KVM_EXIT_IRQ_WINDOW_OPEN:

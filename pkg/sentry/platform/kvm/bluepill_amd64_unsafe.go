@@ -28,6 +28,11 @@ import (
 	"gvisor.dev/gvisor/pkg/sigframe"
 )
 
+//go:nosplit
+func bluepillArchHandleRunEIO(c *vCPU, context unsafe.Pointer) bool {
+	return false
+}
+
 // Instruction pointers used to trigger panics.
 const (
 	_PANIC_RIP_CPU_DIE   = 0xabc
@@ -209,3 +214,6 @@ func bluepillUserHandler(frame uintptr) {
 	bluepillHandler(unsafe.Pointer(frame))
 	sigframe.Sigreturn((*arch.UContext64)(unsafe.Pointer(frame)))
 }
+
+//go:nosplit
+func captureMMIOExit(c *vCPU) {}

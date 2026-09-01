@@ -21,9 +21,22 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/hostsyscall"
 	"gvisor.dev/gvisor/pkg/ring0"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 )
+
+// bluepillArchHandleRunEIO handles QEMU nested-KVM malformed MMIO faults.
+// QEMU reports the aligned synthetic store as GPA+6, so Linux KVM rejects it
+// with EIO before producing KVM_EXIT_MMIO. CPU.Registers already contains the
+// host context to restore.
+//
+//go:nosplit
+func bluepillArchHandleRunEIO(c *vCPU, context unsafe.Pointer) bool {
+	printHex([]byte("RISC-V treating KVM_RUN EIO as VM exit:"), uint64(c.fd))
+	bluepillGuestExit(c, context)
+	return true
+}
 
 // fpRegsPtr returns a fpState for the given address.
 //
@@ -65,11 +78,20 @@ func bluepillArchFpContext(context unsafe.Pointer) *arch.FpState {
 //
 //go:nosplit
 func getHypercallID(addr uintptr) int {
-	if addr < riscv64HypercallMMIOBase || addr >= (riscv64HypercallMMIOBase+_RISCV64_HYPERCALL_MMIO_SIZE) {
+	printHex([]byte("MMIO physical:"), uint64(addr))
+	printHex(
+		[]byte("RISC-V hypercall base:"),
+		uint64(riscv64HypercallMMIOBase),
+	)
+
+	if addr < riscv64HypercallMMIOBase ||
+		addr >= riscv64HypercallMMIOBase+_RISCV64_HYPERCALL_MMIO_SIZE {
 		return _KVM_HYPERCALL_MAX
-	} else {
-		return int(((addr) - riscv64HypercallMMIOBase) >> 2)
 	}
+
+	id := int((addr - riscv64HypercallMMIOBase) >> 2)
+	printHex([]byte("RISC-V hypercall ID:"), uint64(id))
+	return id
 }
 
 // bluepillStopGuest is responsible for injecting sError.
@@ -191,4 +213,26 @@ func handleRiscvSBI(c *vCPU, archCtx *arch.SignalContext64) bool {
 	processSBICall(extID, funcID, regs)
 
 	return true
+}
+
+// captureMMIOExit prints the accepted KVM D-extension state at unexpected MMIO
+// exit. Query one
+// register per build: this function runs on the signal stack and must remain
+// within the linker-enforced nosplit stack limit.
+//
+//go:nosplit
+func captureMMIOExit(c *vCPU) {
+	var value uint64
+	reg := kvmOneReg{
+		id:   _KVM_RISCV64_ISA_EXT_D,
+		addr: uint64(uintptr(unsafe.Pointer(&value))),
+	}
+	errno := hostsyscall.RawSyscallErrno(
+		unix.SYS_IOCTL,
+		uintptr(c.fd),
+		_KVM_GET_ONE_REG,
+		uintptr(unsafe.Pointer(&reg)),
+	)
+	printHex([]byte("Unexpected MMIO guest D extension:"), value)
+	printHex([]byte("Unexpected MMIO D extension errno:"), uint64(errno))
 }

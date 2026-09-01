@@ -26,6 +26,11 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 )
 
+//go:nosplit
+func bluepillArchHandleRunEIO(c *vCPU, context unsafe.Pointer) bool {
+	return false
+}
+
 // fpsimdPtr returns a fpsimd64 for the given address.
 //
 //go:nosplit
@@ -188,3 +193,6 @@ func bluepillArchHandleExit(c *vCPU, context unsafe.Pointer) {
 		c.dieAndDumpExitReason(bluepillArchContext(context))
 	}
 }
+
+//go:nosplit
+func captureMMIOExit(c *vCPU) {}
